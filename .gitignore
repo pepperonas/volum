@@ -1,0 +1,58 @@
+# Model weights — never committed (see docs/licenses.md)
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.bin
+*.gguf
+*.onnx
+weights/
+checkpoints/
+
+# Generated 3D assets and runtime data
+*.glb
+*.gltf
+*.fbx
+*.usdz
+*.3mf
+data/
+exports/
+jobs/
+projects/
+cache/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.vite/
+coverage/
+playwright-report/
+test-results/
+
+# Rust / Tauri
+target/
+src-tauri/target/
+
+# Secrets
+.env
+.env.local
+!.env.example
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

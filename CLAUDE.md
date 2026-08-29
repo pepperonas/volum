@@ -1,0 +1,117 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repository is
+
+**VOLUM** — a local-first, cross-platform image-to-3D desktop application (Tauri 2 +
+React + Python engine). Public open-source project.
+
+**Current state: pre-implementation.** Phase 0 (audit) and Phase 1 (model research) are
+done; no application code exists yet. The full specification is
+`VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines, German) — it is the requirements
+document and takes precedence over this file on questions of scope.
+
+Read before doing anything: **`docs/decision.md`** (the approved technical plan) and
+**`docs/licenses.md`** (why several obvious choices are unavailable).
+
+## Commands
+
+No build yet. Once scaffolded, the intended commands are:
+
+```bash
+# Engine (Python, uv)
+cd engine && uv sync && uv run pytest                  # all tests
+cd engine && uv run pytest tests/test_x.py::test_y     # one test
+cd engine && uv run ruff check . && uv run mypy .
+
+# Frontend
+cd apps/desktop && pnpm install && pnpm test           # Vitest
+cd apps/desktop && pnpm test -- -t "name"              # one test
+cd apps/desktop && pnpm lint && pnpm tsc --noEmit
+
+# Desktop app
+cd apps/desktop && pnpm tauri dev
+cd apps/desktop && pnpm tauri build
+
+# CLI (shares volum-core — never reimplement pipeline logic here)
+uv run volum doctor
+uv run volum models
+uv run volum generate image.jpg
+uv run volum benchmark --model <id> --smoke           # real inference, needs GPU
+```
+
+**Python must be pinned to `>=3.11,<3.13`.** The machine's default `python3` is 3.14.7 and
+the ML stack has no wheels for it. Let `uv` provision the interpreter; never inherit the
+shell default.
+
+`cmake` and `ninja` are **not installed** and are needed for Metal/native kernels:
+`brew install cmake ninja`.
+
+## Architecture — the load-bearing decisions
+
+Full reasoning in `docs/decision.md` §4. The parts that are easy to break by accident:
+
+- **One core, two front doors.** All pipeline logic lives in `engine/volum_core/`. The
+  HTTP engine (`volum_engine`) and the CLI are both thin shells over it. Business logic in
+  the CLI or in the Tauri layer is a bug (spec §32).
+- **The engine is a Tauri sidecar** speaking HTTP + SSE on `127.0.0.1`, ephemeral port,
+  per-session bearer token passed via environment, port announced on the child's stdout.
+  Never bind a non-loopback interface; never use a fixed port; never leave the endpoint
+  unauthenticated.
+- **Every job runs in its own provider subprocess.** Not premature isolation: a killed
+  Metal command buffer can take the process down, GPU kernels cannot be interrupted from
+  Python (so `CANCELLED` is otherwise a lie), and unified memory must actually be returned
+  to the OS.
+- **Every provider gets its own `uv` virtualenv.** ML providers pin mutually incompatible
+  Torch versions. A shared environment makes adding the second provider a dependency
+  fight and makes `ModelManager.remove()` / `disk_usage()` dishonest.
+- **Provider capabilities and requirements are declared data**, not branches in the
+  pipeline. The doctor computes availability from hardware facts.
+
+## Non-obvious constraints
+
+- **Apple Silicon runtime is PyTorch MPS + Metal kernels — NOT MLX.** This deliberately
+  contradicts spec §5. MLX has no image-to-3D ecosystem. See `docs/adr/0002`. Do not
+  "fix" this back to MLX without new evidence.
+- **The development machine (M1 Pro, 16 GB, ~29 GB free disk) cannot run the primary
+  model.** TRELLIS.2 peaks at ~18 GB and its weights are ~15 GB. This is why TripoSR is a
+  V1 provider: it is what makes the pipeline testable here and in CI. Do not remove it as
+  "too old".
+- **`nvdiffrast` is non-commercial** and sits inside the official TRELLIS.2 pipeline — the
+  MIT model licence does not rescue it. The Metal replacement (`mtldiffrast`) is what makes
+  the macOS path licence-clean. **Its own licence is currently UNKNOWN and is blocking for
+  any commercial claim.**
+- **Hunyuan3D-2.1 is excluded on licence grounds, not technical ones.** Its licence
+  excludes the European Union, where this project is developed. It is otherwise one of the
+  best fits for 16 GB machines. Do not add it back without a licence change.
+- **RMBG-2.0 is CC BY-NC — use BiRefNet (MIT).** Model ports pull RMBG by default;
+  substitute it in VOLUM's own preprocessing stage.
+- **DINOv3 is gated** on Hugging Face (account + accepted terms) and requires a visible
+  **"Built with DINOv3"** attribution in the UI. The Model Manager must handle authenticated
+  gated downloads with a real explanation, not a bare 401.
+- **Multi-image in V1 means frame selection, honestly labelled.** Generation models are
+  single-image; TRELLIS.2's own tracker reports multi-image conditioning performing worse.
+  `MULTI_IMAGE` stays `false` on every V1 provider. Real reconstruction (VGGT/MASt3R) is a
+  separate model family with no mesh output — P1 at the earliest.
+- **Reproducibility is per-machine only.** MPS and CUDA kernels differ and the Mac port
+  substitutes attention, GEMM and rasterisation. Same seed + same input + different machine
+  ⇒ different mesh. Record seed/version/runtime/input hash; do not promise more.
+- **The data directory must be relocatable.** One provider plus its environment is ~20 GB
+  of the 29 GB free here. Check free space before every install.
+
+## House rules
+
+- **No fakes in the production path** (spec §37): no `fake.glb`, no invented progress
+  percentages, no mock providers outside unit tests. If a model returns no real progress,
+  show pipeline stages, not a fabricated number.
+- **A failed poll is not an empty result.** A silent empty mesh must fail the job, not
+  export as an asset — this failure mode is documented upstream.
+- **Never commit model weights.** `.gitignore` blocks the common extensions; the Model
+  Manager downloads into the data directory.
+- **Verify licences from the licence text, dated.** Secondary sources were wrong on
+  several material points during Phase 1 (`docs/research.md` §7). Unclear ⇒ `UNKNOWN`,
+  never an optimistic guess.
+- Conventional Commits; Semantic Versioning with a single version source of truth
+  propagated to `pyproject.toml`, `package.json`, `tauri.conf.json`, the CLI and git tags.
+- Documentation is in English (public OSS project); the specification is German.
