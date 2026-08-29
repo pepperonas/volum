@@ -1,0 +1,1 @@
+"""VOLUM command line interface."""

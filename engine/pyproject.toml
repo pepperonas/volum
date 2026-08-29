@@ -1,0 +1,82 @@
+[project]
+name = "volum"
+description = "Local-first image-to-3D engine and CLI"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { file = "../LICENSE" }
+dynamic = ["version"]
+
+dependencies = [
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "rich>=13.7",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+engine = [
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.1",
+]
+imaging = [
+    "pillow>=10.3",
+    "numpy>=1.26",
+]
+mesh = [
+    "trimesh>=4.4",
+    "numpy>=1.26",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+volum = "volum_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/volum_core/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/volum_core", "src/volum_cli", "src/volum_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "gpu: requires a real GPU and installed model weights (excluded from CI)",
+    "slow: takes more than a few seconds",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RUF", "S", "PL"]
+ignore = ["A003", "PLR0911", "PLR0912"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and reach into private helpers on purpose.
+"tests/**" = ["S101", "SLF001", "PLR2004", "PLR0913"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+mypy_path = "src"
+packages = ["volum_core", "volum_cli", "volum_engine"]
+
+[[tool.mypy.overrides]]
+# Optional runtime probes: deliberately absent from the engine environment,
+# because the ML stack lives in per-provider virtualenvs.
+module = ["psutil.*", "trimesh.*", "torch.*", "mlx.*"]
+ignore_missing_imports = true
