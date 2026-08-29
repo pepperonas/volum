@@ -94,15 +94,26 @@ def test_cuda_is_unavailable_not_unknown_on_macos() -> None:
         assert _expected_cuda().availability is Availability.UNAVAILABLE
 
 
-def test_deep_probe_adds_gpu_core_count_on_apple_silicon() -> None:
-    """The shallow path has no source for this: hw.perflevel0.gpu_core_count
-    does not exist, which the first doctor run revealed by printing nothing."""
+def test_deep_probe_returns_a_sane_core_count_or_nothing() -> None:
+    """The shallow path has no source for this: hw.perflevel0.gpu_core_count does
+    not exist, which the first doctor run revealed by printing nothing.
+
+    ``None`` is a legitimate result, not a failure. CI demonstrated why: on a
+    virtualised Apple Silicon runner ("Apple M1 (Virtual)") system_profiler
+    reports no core count at all. The value is cosmetic — nothing gates on it —
+    so the contract is "a positive number or nothing, and never an exception".
+    """
     hardware = detect_hardware(deep=True)
     if not hardware.is_apple_silicon:
         return
     assert hardware.gpus
-    assert hardware.gpus[0].cores is not None
-    assert hardware.gpus[0].cores > 0
+    cores = hardware.gpus[0].cores
+    assert cores is None or cores > 0
+
+
+def test_deep_probe_never_raises_on_any_platform() -> None:
+    """It shells out to system_profiler, which may be absent, slow or virtualised."""
+    assert detect_hardware(deep=True) is not None
 
 
 def test_shallow_probe_stays_fast_and_reports_no_core_count() -> None:
