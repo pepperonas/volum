@@ -14,3 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-artifact licence inventory including pipeline dependencies (`docs/licenses.md`).
 - Technical decision and architecture (`docs/decision.md`, `docs/architecture.md`).
 - Architecture decision records ADR-0001 (primary provider) and ADR-0002 (runtime strategy).
+- Hardware detection (`HardwareDetector`) with a four-valued availability model
+  separating "the hardware cannot" from "the software is not installed yet".
+- `volum doctor`: platform, CPU, GPU, memory, disk, runtimes and a per-model
+  verdict for this machine.
+- `volum models list` / `volum models show <id>` including the full licence chain.
+- Model registry with dated licence facts. Provider contract
+  (`ImageTo3DProvider`) and hardware gating.
+- Relocatable data directory with atomic settings and path-traversal guards.
+- Version single source of truth (`scripts/sync_version.py`) and CI across
+  Linux, macOS (Apple Silicon) and Windows on Python 3.11 and 3.12.

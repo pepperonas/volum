@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tests must never touch a real user data directory.
+  VOLUM_DATA_DIR: ${{ github.workspace }}/.volum-ci-data
+
+jobs:
+  engine:
+    name: Engine (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 is Apple Silicon: the primary target must be tested on the
+        # architecture it targets, not only on x86 Linux.
+        os: [ubuntu-latest, macos-14, windows-latest]
+        python: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+
+      - name: Install
+        run: uv sync --extra dev --python ${{ matrix.python }}
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Format
+        run: uv run ruff format --check src tests
+
+      - name: Type check
+        run: uv run --with mypy mypy
+
+      - name: Test
+        # No GPU on any runner, so GPU tests are excluded here by design and run
+        # as an optional smoke test elsewhere (spec sections 37 and 38).
+        run: uv run pytest -m "not gpu" --cov=volum_core --cov-report=term-missing
+
+      - name: Doctor runs on a clean machine
+        # Regression guard: the doctor once reported "no usable runtime" for
+        # every model on a capable machine simply because no provider was
+        # installed yet. On a fresh runner it must still produce a report.
+        run: uv run volum doctor
+
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every version target matches the single source of truth
+        run: python3 scripts/sync_version.py --check
+
+  licences:
+    name: Licence documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No model weights in the repository
+        # Weights are downloaded into the data directory, never committed.
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '\.(safetensors|ckpt|pth|pt|bin|gguf|onnx)$'; then
+            echo "::error::Model weights must never be committed. See docs/licenses.md."
+            exit 1
+          fi
+          echo "No weight files tracked."
+
+      - name: Required documents are present
+        run: |
+          set -euo pipefail
+          for f in README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md \
+                   docs/licenses.md docs/architecture.md docs/privacy.md; do
+            test -f "$f" || { echo "::error::Missing $f"; exit 1; }
+          done
+          echo "All required documents present."

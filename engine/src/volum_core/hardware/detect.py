@@ -71,8 +71,13 @@ def detect_metal() -> Availability:
     return Availability.UNAVAILABLE
 
 
+@lru_cache(maxsize=1)
 def _apple_gpu_cores() -> int | None:
     """GPU core count on Apple Silicon.
+
+    Cached for the process lifetime: the number is a static hardware fact, and
+    the probe costs about two seconds. Without the cache the test suite spent
+    most of its runtime asking ``system_profiler`` the same question.
 
     There is no ``sysctl`` for this — ``hw.perflevel0.gpu_core_count`` does not
     exist, which the first run of the doctor demonstrated by printing nothing.
