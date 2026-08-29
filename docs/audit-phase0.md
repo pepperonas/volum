@@ -5,7 +5,7 @@ Machine: primary development machine (Apple Silicon)
 
 ## 1. Repository state
 
-The working directory `/Users/martin/claude/volum` contained **no code**:
+The working directory contained **no code**:
 
 ```
 VOLUM_Masterprompt_Local_CrossPlatform.md   (spec, 2065 lines)
