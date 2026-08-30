@@ -9,18 +9,24 @@
 weights/
 checkpoints/
 
-# Generated 3D assets and runtime data
+# Generated 3D assets and runtime data.
+#
+# These are ANCHORED to the repository root with a leading slash. Without it,
+# `jobs/` also matched engine/src/volum_core/jobs/ and silently excluded a
+# source package from the repository — the code ran locally and was simply
+# absent for everyone else. An unanchored directory pattern in .gitignore
+# matches at every depth.
 *.glb
 *.gltf
 *.fbx
 *.usdz
 *.3mf
-data/
-exports/
-jobs/
-projects/
-cache/
-logs/
+/data/
+/exports/
+/jobs/
+/projects/
+/cache/
+/logs/
 
 # Python
 __pycache__/

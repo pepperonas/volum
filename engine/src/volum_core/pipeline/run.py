@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from ..hardware.detect import detect_hardware
-from ..jobs.manager import JobCancelled, JobManager
+from ..jobs.manager import JobCancelledError, JobManager
 from ..jobs.types import JobError, JobRecord, JobStatus
 from ..providers.types import GenerationRequest, ImageTo3DProvider
 from ..providers.worker_provider import ProviderExecutionError
@@ -157,7 +157,7 @@ def run_pipeline(  # noqa: PLR0913 - all keyword-only; a parameter object would
             on_stage(JobStatus.COMPLETED.value)
         return PipelineResult(job=record, report=report, metadata=metadata)
 
-    except JobCancelled:
+    except JobCancelledError:
         provider.cancel()
         if record.status.is_active:
             manager.advance(record, JobStatus.CANCELLED, message="Cancelled by the user.")

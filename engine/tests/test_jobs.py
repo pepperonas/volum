@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from volum_core.jobs import (
-    InvalidTransition,
+    InvalidTransitionError,
     JobError,
     JobManager,
     JobRecord,
@@ -21,7 +21,7 @@ from volum_core.jobs import (
     JobStore,
     can_transition,
 )
-from volum_core.jobs.manager import CancellationToken, JobCancelled
+from volum_core.jobs.manager import CancellationToken, JobCancelledError
 
 
 @pytest.fixture
@@ -119,7 +119,7 @@ def test_reporting_within_a_stage_does_not_transition(manager: JobManager) -> No
 def test_illegal_transitions_raise(manager: JobManager) -> None:
     record = manager.create(model_id="triposr", input_files=[])
     record = manager.advance(record, JobStatus.COMPLETED)
-    with pytest.raises(InvalidTransition):
+    with pytest.raises(InvalidTransitionError):
         manager.advance(record, JobStatus.RECONSTRUCTING)
 
 
@@ -205,7 +205,7 @@ def test_token_raises_at_a_stage_boundary() -> None:
     token = CancellationToken()
     token.raise_if_cancelled()
     token.cancel()
-    with pytest.raises(JobCancelled):
+    with pytest.raises(JobCancelledError):
         token.raise_if_cancelled()
 
 

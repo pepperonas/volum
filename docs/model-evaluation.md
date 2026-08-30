@@ -92,16 +92,38 @@ Consequence for spec §30: VOLUM stores seed, model version, runtime, parameters
 hash and preprocessing config, and **states plainly that bit-identical reproduction is
 only expected on the same machine with the same runtime**. Claiming more would be false.
 
-## 6. Benchmarks — to be measured
+## 6. Benchmarks
 
-Empty until `volum benchmark` runs on real hardware with identical inputs (spec §34).
+### Measured by VOLUM
 
-| Model | Runtime | Hardware | Preprocess | Inference | Postprocess | Total | Peak mem | Vertices | Triangles | Validation |
-|---|---|---|---|---|---|---|---|---|---|---|
-| TRELLIS.2 | MPS | M1 Pro 16 GB | — | — | — | — | — | — | — | — |
-| TRELLIS.2 | MPS | M4 Pro 24 GB | — | — | — | — | — | — | — | — |
-| TripoSR | MPS | M1 Pro 16 GB | — | — | — | — | — | — | — | — |
-| SF3D | MPS/CPU | M1 Pro 16 GB | — | — | — | — | — | — | — | — |
+First real measurements. Wall clock from `volum generate`, single image, default
+settings, `mc_resolution=256`, on an otherwise idle machine.
+
+| Model | Runtime | Hardware | Input | Total | Vertices | Triangles | Watertight | Validation |
+|---|---|---|---|---|---|---|---|---|
+| TripoSR | MPS | M1 Pro, 16 GB, macOS 26.6.2 | chair.png | 51.5 s | 41,864 | 83,732 | yes | pass |
+| TripoSR | MPS | M1 Pro, 16 GB, macOS 26.6.2 | flamingo.png | 63.3 s | 23,095 | 46,184 | no | pass, with notes |
+| TRELLIS.2 | MPS | M1 Pro, 16 GB | — | — | — | — | — | not yet run |
+
+Notes worth keeping with the numbers: the flamingo result is not watertight and
+has two zero-area faces — reported as notes rather than failures, because holes
+make a mesh unfit for printing, not unfit for use. Both runs produced vertex
+colours and no UV map, which is what TripoSR declares.
+
+These are *not* a quality judgement. They establish that the pipeline works and
+give an honest baseline for the machine most likely to run it.
+
+### Third-party claims
+
+Gathered during research and recorded as *claims* with their conditions, not as
+VOLUM results:
+
+| Source | Model | Hardware | Time |
+|---|---|---|---|
+| `microsoft/TRELLIS.2` | TRELLIS.2 1024³ | H100 | ~17 s |
+| `microsoft/TRELLIS.2` | TRELLIS.2 1536³ | H100 | ~60 s |
+| `shivampkumar/trellis-mac` | TRELLIS.2 | M4 Pro 24 GB | 5 m 13 s cold / 3 m 20 s warm |
+| `pwilkin/trellis.cpp` | TRELLIS.2 res-1024 | RTX 5060 Ti | 3 m 16 s – 7 m 23 s |
 
 Third-party figures gathered during research, recorded as *claims* with their conditions,
 not as VOLUM results:
@@ -115,7 +137,9 @@ not as VOLUM results:
 
 Note the spread: the same model is ~17 s on an H100 and ~5 minutes on a 24 GB Mac. Any
 UI copy, progress estimate or marketing claim must be derived from VOLUM's own numbers on
-the user's own hardware, never from the H100 figure.
+the user's own hardware, never from the H100 figure. This is why
+`ResourceEstimate.estimated_seconds` stays `None` until VOLUM has measured the
+model on the machine in front of it.
 
 ## 7. Verdict
 
