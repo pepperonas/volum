@@ -54,7 +54,12 @@ class InstallManifest(BaseModel):
     volum_version: str
     installed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     python_version: str
-    source_commit: str | None = None
+    source_commits: dict[str, str] = Field(default_factory=dict)
+    skipped_components: list[str] = Field(
+        default_factory=list,
+        description="Optional parts that did not install. Recorded because they "
+        "change how the model behaves, and a user comparing results needs to know.",
+    )
     weight_revisions: dict[str, str] = Field(default_factory=dict)
     shims: list[str] = Field(default_factory=list)
     frozen_requirements: list[str] = Field(
@@ -281,8 +286,8 @@ class ModelManager:
         directory.mkdir(parents=True, exist_ok=True)
 
         self._create_environment(spec, on_progress)
+        commits, skipped = self._fetch_sources(spec, on_progress)
         frozen = self._freeze(spec.model_id)
-        commit = self._fetch_source(spec, on_progress)
         revisions = self._fetch_weights(spec, on_progress, hf_token)
         shims = self._write_shims(spec, on_progress)
 
@@ -290,7 +295,8 @@ class ModelManager:
             model_id=model_id,
             volum_version=__version__,
             python_version=spec.python_version,
-            source_commit=commit,
+            source_commits=commits,
+            skipped_components=skipped,
             weight_revisions=revisions,
             shims=shims,
             frozen_requirements=frozen,
@@ -335,19 +341,101 @@ class ModelManager:
             return []
         return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
-    def _fetch_source(self, spec: InstallSpec, on_progress: InstallProgress) -> str | None:
-        if spec.source is None:
-            return None
-        target = self.source_dir(spec.model_id)
-        on_progress("source", "Fetching the model implementation")
-        # Clone then check out the pinned commit. `git clone --branch` does not
-        # accept a bare commit hash, and a branch name would not be a pin.
-        self._run(["git", "clone", "--quiet", spec.source.url, str(target)], "fetching the source")
-        self._run(
-            ["git", "-C", str(target), "checkout", "--quiet", spec.source.commit],
-            "checking out the pinned commit",
-        )
-        return spec.source.commit
+    def check_prerequisites(self, spec: InstallSpec) -> tuple[list[str], list[str]]:
+        """Probe declared prerequisites. Returns ``(blocking, degraded)``.
+
+        Run before anything is downloaded. A missing Metal toolchain should cost
+        the user a sentence, not ten gigabytes and a build error.
+        """
+        blocking: list[str] = []
+        degraded: list[str] = []
+        for prerequisite in spec.prerequisites:
+            try:
+                result = self._run_command(list(prerequisite.probe), 30)
+                satisfied = result.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                satisfied = False
+            if satisfied:
+                continue
+            message = f"{prerequisite.description} — {prerequisite.remedy}"
+            if prerequisite.required:
+                blocking.append(message)
+            else:
+                consequence = prerequisite.consequence_if_missing or "reduced functionality"
+                degraded.append(f"{message} Without it: {consequence}")
+        return blocking, degraded
+
+    def _satisfied_prerequisites(self, spec: InstallSpec) -> set[str]:
+        satisfied: set[str] = set()
+        for prerequisite in spec.prerequisites:
+            try:
+                if self._run_command(list(prerequisite.probe), 30).returncode == 0:
+                    satisfied.add(prerequisite.name)
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return satisfied
+
+    def _fetch_sources(
+        self, spec: InstallSpec, on_progress: InstallProgress
+    ) -> tuple[dict[str, str], list[str]]:
+        """Clone and optionally install every source. Returns commits and skips."""
+        if not spec.sources:
+            return {}, []
+
+        available = self._satisfied_prerequisites(spec) if spec.prerequisites else set()
+        root = self.source_dir(spec.model_id)
+        root.mkdir(parents=True, exist_ok=True)
+        commits: dict[str, str] = {}
+        skipped: list[str] = []
+
+        for source in spec.sources:
+            missing = [name for name in source.requires if name not in available]
+            if missing:
+                skipped.append(f"{source.directory}: needs {', '.join(missing)}")
+                on_progress("source", f"Skipping {source.directory} ({', '.join(missing)})")
+                continue
+
+            target = root / source.directory
+            on_progress("source", f"Fetching {source.directory}")
+            if not target.exists():
+                # Clone then check out: `git clone --branch` does not take a bare
+                # commit hash, and a branch name would not be a pin.
+                self._run(
+                    ["git", "clone", "--quiet", source.url, str(target)],
+                    f"fetching {source.directory}",
+                )
+            self._run(
+                ["git", "-C", str(target), "checkout", "--quiet", source.commit],
+                f"checking out {source.directory}",
+            )
+            commits[source.directory] = source.commit
+
+            if not source.pip_install:
+                continue
+
+            package = target / source.pip_subdirectory if source.pip_subdirectory else target
+            args = [
+                self._uv,
+                "pip",
+                "install",
+                "--python",
+                str(self.python_executable(spec.model_id)),
+            ]
+            if source.no_build_isolation:
+                args.append("--no-build-isolation")
+            args.append(str(package))
+            on_progress("source", f"Building {source.directory}")
+            try:
+                self._run(args, f"building {source.directory}")
+            except ModelInstallError:
+                if not source.optional:
+                    raise
+                # An accelerator with a working fallback. Losing speed beats
+                # losing the model, but the user is told which one went.
+                skipped.append(f"{source.directory}: build failed, using the fallback")
+                on_progress("source", f"{source.directory} did not build — continuing")
+
+        return commits, skipped
 
     def _fetch_weights(
         self, spec: InstallSpec, on_progress: InstallProgress, token: str | None
@@ -446,7 +534,7 @@ class ModelManager:
         if spec is None:
             return problems
 
-        if spec.source is not None and not self.source_dir(model_id).is_dir():
+        if spec.sources and not self.source_dir(model_id).is_dir():
             problems.append("The model implementation is missing.")
 
         weights = self.weights_dir(model_id)

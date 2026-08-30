@@ -139,3 +139,58 @@ def test_a_corrupt_report_reads_as_none(tmp_path: Path) -> None:
     target = tmp_path / "quality_report.json"
     target.write_text("{ not json", encoding="utf-8")
     assert load_report(target) is None
+
+
+# --- printing severity ----------------------------------------------------
+#
+# The same mesh is acceptable for one target and not the other. These pin that
+# the difference is severity, not a different set of checks.
+
+
+def _open_mesh() -> trimesh.Trimesh:
+    sphere = trimesh.creation.icosphere(subdivisions=2)
+    return trimesh.Trimesh(vertices=sphere.vertices, faces=sphere.faces[:-40])
+
+
+def test_holes_are_a_note_for_a_render(tmp_path: Path) -> None:
+    report = validate_asset(_write(_open_mesh(), tmp_path / "open.glb"))
+    assert report.valid
+    assert not report.checked_for_printing
+
+
+def test_holes_are_fatal_for_a_print(tmp_path: Path) -> None:
+    """A slicer needs a closed solid; handing it an open surface is a failure,
+    not a caveat."""
+    report = validate_asset(_write(_open_mesh(), tmp_path / "open.stl"), for_printing=True)
+    assert not report.valid
+    assert report.checked_for_printing
+    assert any(issue.code == "not_watertight" and issue.fatal for issue in report.issues)
+
+
+def test_a_closed_mesh_passes_the_print_check(tmp_path: Path, good_mesh: Path) -> None:
+    report = validate_asset(good_mesh, for_printing=True)
+    assert report.valid
+    assert report.manifold
+
+
+def test_loose_pieces_are_reported_but_not_fatal(tmp_path: Path) -> None:
+    """Real generated models carried five and six pieces. Worth saying; not
+    VOLUM's decision to delete them."""
+    big = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
+    speck = trimesh.creation.icosphere(subdivisions=1, radius=0.05)
+    speck.apply_translation([4.0, 0, 0])
+    combined = trimesh.util.concatenate([big, speck])
+
+    report = validate_asset(_write(combined, tmp_path / "parts.stl"), for_printing=True)
+    assert report.solid_count == 2
+    issue = next(i for i in report.issues if i.code == "multiple_solids")
+    assert not issue.fatal
+    assert report.valid
+
+
+def test_the_manifold_verdict_is_recorded(tmp_path: Path, good_mesh: Path) -> None:
+    assert validate_asset(good_mesh, for_printing=True).manifold is True
+    assert validate_asset(_write(_open_mesh(), tmp_path / "o.glb"), for_printing=True).manifold in (
+        True,
+        False,
+    )

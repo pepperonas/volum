@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from volum_core.config import get_data_dir, load_settings
+from volum_core.export import PRINT_FORMATS, ExportFormat, ExportOptions
 from volum_core.hardware import run_doctor
 from volum_core.hardware.detect import detect_hardware
 from volum_core.hardware.types import RuntimeKind
@@ -26,7 +27,7 @@ from volum_core.models import (
     all_models,
     get_model,
 )
-from volum_core.pipeline import run_pipeline
+from volum_core.pipeline import PipelineResult, run_pipeline
 from volum_core.providers import Verdict
 from volum_core.providers.triposr import TripoSRProvider
 from volum_core.providers.types import CommercialUse, ProviderMetadata
@@ -275,10 +276,11 @@ def models_install(
         raise typer.Exit(1) from error
 
     usage = manager.disk_usage(model_id).get(model_id, 0)
-    console.print(
-        f"\n[green]{model_id} installed[/green] ({_gib(usage)} on disk, "
-        f"source {manifest.source_commit[:12] if manifest.source_commit else 'n/a'})"
-    )
+    console.print(f"\n[green]{model_id} installed[/green] ({_gib(usage)} on disk)")
+    for name, commit in sorted(manifest.source_commits.items()):
+        console.print(f"  [dim]{name:<16} {commit[:12]}[/dim]")
+    for skipped in manifest.skipped_components:
+        console.print(f"  [yellow]skipped[/yellow] {skipped}")
 
 
 @models_app.command("verify")
@@ -326,6 +328,77 @@ def models_disk() -> None:
     console.print(f"  {'total':<16} {_gib(sum(usage.values())):>10}")
 
 
+def _export_options(
+    formats: list[str] | None, *, for_print: bool, size_mm: float | None
+) -> ExportOptions:
+    """Turn the format flags into export options, or exit with a usable message."""
+    try:
+        chosen = (
+            PRINT_FORMATS
+            if for_print and not formats
+            else tuple(ExportFormat(f.lower()) for f in (formats or ["glb"]))
+        )
+    except ValueError as error:
+        known = ", ".join(f.value for f in ExportFormat)
+        err_console.print(f"[red]Unknown format.[/red] Choose from: {known}")
+        raise typer.Exit(1) from error
+
+    if for_print:
+        # --print means printable output; an explicit --format adds to that
+        # rather than replacing it.
+        chosen = tuple(dict.fromkeys((*chosen, *PRINT_FORMATS)))
+
+    printing = any(fmt.is_print_format for fmt in chosen)
+    if printing and size_mm is None:
+        console.print(
+            "[yellow]No --size-mm given, so the export keeps the model's own scale, "
+            "which is arbitrary. Most slicers will show a few millimetres.[/yellow]"
+        )
+    return ExportOptions(formats=chosen, target_size_mm=size_mm, lay_on_build_plate=printing)
+
+
+def _render_result(result: PipelineResult) -> None:
+    """Print what was produced."""
+    job = result.job
+    console.print(f"\n[green]Done[/green] in {job.duration_seconds:.1f}s")
+
+    if result.repair is not None:
+        repair = result.repair
+        console.print(
+            f"  Repair     {repair.strategy.value} - watertight "
+            f"{repair.watertight_before} -> {repair.watertight_after}, "
+            f"{repair.faces_before:,} -> {repair.faces_after:,} faces"
+        )
+        if not repair.detail_preserved:
+            console.print(
+                "             [yellow]the surface was rebuilt, so fine detail is rounded[/yellow]"
+            )
+
+    for exported in result.exports:
+        size = (
+            " x ".join(f"{d:.1f}" for d in exported.size_mm) + " mm"
+            if exported.size_mm
+            else "model scale"
+        )
+        console.print(
+            f"  {exported.format.value:<10} {exported.path}  "
+            f"[dim]({exported.size_bytes / 1024:.0f} KB, {size})[/dim]"
+        )
+    console.print(f"  Asset      {job.artifacts['mesh']}")
+
+    report = result.report
+    if report is None:
+        return
+    console.print(f"  Geometry   {report.vertices:,} vertices, {report.triangles:,} triangles")
+    console.print("  Dimensions " + " x ".join(f"{d:.3f}" for d in report.dimensions))
+    console.print(
+        f"  Surface    watertight={report.watertight}, manifold={report.manifold}, "
+        f"solids={report.solid_count}, vertex colours={report.has_vertex_colors}"
+    )
+    for issue in report.issues:
+        console.print(f"  [yellow]note[/yellow]  {issue.message}")
+
+
 @app.command()
 def generate(
     images: Annotated[list[Path], typer.Argument(help="One or more input images.", exists=True)],
@@ -339,6 +412,38 @@ def generate(
     ] = 256,
     device: Annotated[
         str | None, typer.Option("--device", help="mps, cuda or cpu. Detected by default.")
+    ] = None,
+    formats: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output formats: glb, stl, 3mf, obj, ply. Repeat for several. Default: glb.",
+        ),
+    ] = None,
+    for_print: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            help="Prepare for 3D printing: exports STL and 3MF, repairs the surface "
+            "to a closed solid, and fails the job if it is not printable.",
+        ),
+    ] = False,
+    single_part: Annotated[
+        bool,
+        typer.Option(
+            "--single-part",
+            help="Keep only the largest connected piece. Generated models often carry "
+            "loose fragments that a slicer prints as separate objects.",
+        ),
+    ] = False,
+    size_mm: Annotated[
+        float | None,
+        typer.Option(
+            "--size-mm",
+            help="Longest side of the exported object in millimetres. Print formats "
+            "are otherwise exported at the model's own arbitrary scale.",
+        ),
     ] = None,
 ) -> None:
     """Generate a 3D asset from one or more images. Runs entirely on this machine."""
@@ -362,6 +467,8 @@ def generate(
             f"[yellow]{model} uses a single image. The first of {len(images)} will be "
             "used; the others are ignored.[/yellow]"
         )
+
+    export_options = _export_options(formats, for_print=for_print, size_mm=size_mm)
 
     data_dir = get_data_dir()
     jobs = JobManager(JobStore(data_dir / "jobs"))
@@ -388,6 +495,8 @@ def generate(
             output_dir=output_dir,
             parameters={"mc_resolution": resolution},
             seed=seed,
+            export=export_options,
+            drop_loose_parts=single_part,
             on_stage=lambda stage: status.update(f"[cyan]{stage}[/cyan]..."),
         )
 
@@ -402,19 +511,7 @@ def generate(
                 err_console.print(f"\n[dim]{job.error.technical[:1500]}[/dim]")
         raise typer.Exit(1)
 
-    report = result.report
-    console.print(f"\n[green]Done[/green] in {job.duration_seconds:.1f}s")
-    console.print(f"  Asset      {job.artifacts['mesh']}")
-    if report is not None:
-        console.print(f"  Geometry   {report.vertices:,} vertices, {report.triangles:,} triangles")
-        dims = " x ".join(f"{d:.3f}" for d in report.dimensions)
-        console.print(f"  Dimensions {dims}")
-        console.print(
-            f"  Surface    watertight={report.watertight}, "
-            f"vertex colours={report.has_vertex_colors}, UV={report.has_uv}"
-        )
-        for issue in report.issues:
-            console.print(f"  [yellow]note[/yellow]  {issue.message}")
+    _render_result(result)
 
 
 def main() -> None:

@@ -57,6 +57,13 @@ class QualityReport(BaseModel):
     has_vertex_colors: bool = False
     has_uv: bool = False
 
+    #: Separate connected solids. More than one means the slicer sees several
+    #: objects, and stray fragments are a common artefact of generated geometry.
+    solid_count: int | None = None
+    manifold: bool | None = None
+    #: True when this asset was judged against what a slicer needs.
+    checked_for_printing: bool = False
+
     issues: list[ValidationIssue] = Field(default_factory=list)
 
     @property
@@ -138,8 +145,93 @@ def _count_non_manifold_edges(mesh: trimesh.Trimesh) -> int | None:
         return None
 
 
-def validate_asset(path: Path) -> QualityReport:
-    """Inspect a generated asset and report what is actually in it."""
+def _count_solids(mesh: trimesh.Trimesh) -> int | None:
+    """Connected components. Cheap, and a real printing problem when > 1."""
+    try:
+        return len(mesh.split(only_watertight=False))
+    except (AttributeError, ValueError, MemoryError):
+        return None
+
+
+def _collect_issues(mesh: trimesh.Trimesh, report: QualityReport, *, for_printing: bool) -> None:
+    """Judge the measured facts. Severity depends on what the asset is for."""
+    report.solid_count = _count_solids(mesh)
+    from ..pipeline.repair import is_manifold  # noqa: PLC0415 - avoids an import cycle
+
+    report.manifold = is_manifold(mesh)
+
+    if not report.watertight:
+        report.issues.append(
+            ValidationIssue(
+                code="not_watertight",
+                message=(
+                    "The surface has holes, so this is not a closed solid and a slicer "
+                    "will not print it reliably."
+                    if for_printing
+                    else "The surface has holes. It is usable, but not suitable for "
+                    "3D printing without repair."
+                ),
+                fatal=for_printing,
+            )
+        )
+
+    if for_printing and report.manifold is False:
+        report.issues.append(
+            ValidationIssue(
+                code="not_manifold",
+                message="The surface is not manifold — edges meet in ways a solid "
+                "cannot have. Slicers reject or mis-slice this.",
+                fatal=True,
+            )
+        )
+
+    if report.solid_count is not None and report.solid_count > 1:
+        report.issues.append(
+            ValidationIssue(
+                code="multiple_solids",
+                message=(
+                    f"The model is {report.solid_count} separate pieces. Loose fragments "
+                    "print as individual objects, usually unintentionally."
+                ),
+                # Not fatal: some models genuinely have several parts, and
+                # deciding that for the user would be wrong.
+                fatal=False,
+            )
+        )
+    if report.volume is not None and report.volume < 0:
+        # Only meaningful on a closed surface; an open mesh has no signed volume.
+        report.issues.append(
+            ValidationIssue(
+                code="inverted_normals",
+                message="The surface appears to be inside out.",
+            )
+        )
+    if report.degenerate_faces:
+        report.issues.append(
+            ValidationIssue(
+                code="degenerate_faces",
+                message=f"{report.degenerate_faces} faces have no area.",
+            )
+        )
+    if not report.materials and not report.has_vertex_colors:
+        report.issues.append(
+            ValidationIssue(
+                code="no_surface_colour",
+                message="The asset has no materials and no vertex colours; it will "
+                "render untextured.",
+            )
+        )
+
+
+def validate_asset(path: Path, *, for_printing: bool = False) -> QualityReport:
+    """Inspect a generated asset and report what is actually in it.
+
+    ``for_printing`` changes severity, not the checks. A surface with holes is a
+    blemish in a render and a refusal in a slicer, so the same finding is a note
+    for one target and a failure for the other. Applying print severity to every
+    asset would reject perfectly good web models; applying render severity to a
+    print would hand the user a file their printer rejects.
+    """
     if not path.exists():
         return QualityReport(
             valid=False,
@@ -153,7 +245,9 @@ def validate_asset(path: Path) -> QualityReport:
         )
 
     size = path.stat().st_size
-    report = QualityReport(valid=False, file=str(path), file_size_bytes=size)
+    report = QualityReport(
+        valid=False, file=str(path), file_size_bytes=size, checked_for_printing=for_printing
+    )
 
     if size == 0:
         report.issues.append(
@@ -233,37 +327,7 @@ def validate_asset(path: Path) -> QualityReport:
     uv = getattr(visual, "uv", None)
     report.has_uv = uv is not None and len(uv) > 0
 
-    if not report.watertight:
-        report.issues.append(
-            ValidationIssue(
-                code="not_watertight",
-                message="The surface has holes. It is usable, but not suitable for "
-                "3D printing without repair.",
-            )
-        )
-    if report.volume is not None and report.volume < 0:
-        # Only meaningful on a closed surface; an open mesh has no signed volume.
-        report.issues.append(
-            ValidationIssue(
-                code="inverted_normals",
-                message="The surface appears to be inside out.",
-            )
-        )
-    if report.degenerate_faces:
-        report.issues.append(
-            ValidationIssue(
-                code="degenerate_faces",
-                message=f"{report.degenerate_faces} faces have no area.",
-            )
-        )
-    if not report.materials and not report.has_vertex_colors:
-        report.issues.append(
-            ValidationIssue(
-                code="no_surface_colour",
-                message="The asset has no materials and no vertex colours; it will "
-                "render untextured.",
-            )
-        )
+    _collect_issues(mesh, report, for_printing=for_printing)
 
     report.valid = not report.fatal_issues
     return report

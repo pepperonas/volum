@@ -42,18 +42,81 @@ class WeightSpec(BaseModel):
         description="Requires accepted terms and a token on the host. The manager "
         "must say so in words rather than surface a 401.",
     )
+    manual_approval: bool = Field(
+        default=False,
+        description="Access is granted by a human, not by clicking accept. DINOv3 works "
+        "this way, so a user can hold a valid token and still be refused for days. "
+        "Worth saying before a download starts, not after.",
+    )
+    size_bytes: int | None = Field(
+        default=None, description="Measured from the host, not estimated. Used for preflight."
+    )
     license_note: str | None = None
+    target_subdirectory: str | None = Field(
+        default=None,
+        description="Where the files must land relative to the weights directory. "
+        "Model code often expects an exact layout.",
+    )
 
 
 class SourceSpec(BaseModel):
-    """A git repository holding the model's inference code."""
+    """A git repository holding model or support code."""
 
     url: str
     commit: str = Field(description="Exact commit. Never a branch name.")
+    directory: str = Field(description="Where to clone it, relative to the model's source dir.")
     subdirectory: str | None = Field(
         default=None,
         description="Directory within the repo to expose on the worker's path, "
         "e.g. 'tsr' for TripoSR.",
+    )
+    pip_install: bool = Field(
+        default=False,
+        description="Install the clone as a package rather than only putting it on "
+        "the path. Some dependencies are only distributed as git checkouts.",
+    )
+    pip_subdirectory: str | None = Field(
+        default=None, description="Install this subdirectory instead of the repository root."
+    )
+    no_build_isolation: bool = Field(
+        default=False,
+        description="Build against the environment's own packages. Required for native "
+        "extensions that need torch at build time — an isolated build environment has no "
+        "torch in it, and the build fails on an import rather than on anything meaningful.",
+    )
+    optional: bool = Field(
+        default=False,
+        description="A failed install is recorded and the install continues. For "
+        "accelerators with a working software fallback: losing speed is much better "
+        "than losing the model.",
+    )
+    build_env: dict[str, str] = Field(
+        default_factory=dict, description="Environment variables for the build."
+    )
+    requires: tuple[str, ...] = Field(
+        default=(),
+        description="Prerequisite names (see Prerequisite) that must be satisfied, "
+        "otherwise this source is skipped.",
+    )
+
+
+class Prerequisite(BaseModel):
+    """Something outside VOLUM that a part of an install needs.
+
+    Checked before anything is downloaded. Declared rather than discovered at
+    failure time, so the manager can say what is missing and what it costs —
+    instead of aborting midway through a ten-gigabyte download.
+    """
+
+    name: str
+    description: str
+    #: Command that must succeed. Checked with a short timeout.
+    probe: tuple[str, ...]
+    remedy: str = Field(description="What the user can do about it, in plain words.")
+    #: False when the install can proceed without it, in a reduced form.
+    required: bool = True
+    consequence_if_missing: str | None = Field(
+        default=None, description="What the user loses. Only meaningful when not required."
     )
 
 
@@ -77,13 +140,22 @@ class InstallSpec(BaseModel):
     model_id: str
     python_version: str = Field(default="3.11")
     pip_packages: tuple[str, ...] = ()
-    source: SourceSpec | None = None
+    sources: tuple[SourceSpec, ...] = ()
     weights: tuple[WeightSpec, ...] = ()
     shims: tuple[ShimSpec, ...] = ()
+    prerequisites: tuple[Prerequisite, ...] = ()
+    #: Environment the worker needs. Backend selection for these models happens
+    #: through environment variables read at import time, so it has to be part
+    #: of the install record rather than passed per run.
+    worker_env: dict[str, str] = Field(default_factory=dict)
 
     @property
     def requires_token(self) -> bool:
         return any(weight.gated for weight in self.weights)
+
+    @property
+    def download_bytes(self) -> int:
+        return sum(weight.size_bytes or 0 for weight in self.weights)
 
 
 TRIPOSR_INSTALL = InstallSpec(
@@ -118,11 +190,14 @@ TRIPOSR_INSTALL = InstallSpec(
         # Replaces torchmcubes; see the shim below.
         "PyMCubes",
     ),
-    source=SourceSpec(
-        url="https://github.com/VAST-AI-Research/TripoSR",
-        # Pinned rather than a branch: a moving source would silently invalidate
-        # every reproducibility claim VOLUM makes. Verified 2026-08-30.
-        commit="107cefdc244c39106fa830359024f6a2f1c78871",
+    sources=(
+        SourceSpec(
+            url="https://github.com/VAST-AI-Research/TripoSR",
+            # Pinned rather than a branch: a moving source would silently invalidate
+            # every reproducibility claim VOLUM makes. Verified 2026-08-30.
+            commit="107cefdc244c39106fa830359024f6a2f1c78871",
+            directory="TripoSR",
+        ),
     ),
     weights=(
         WeightSpec(
@@ -131,6 +206,7 @@ TRIPOSR_INSTALL = InstallSpec(
             revision="5b521936b01fbe1890f6f9baed0254ab6351c04a",
             files=("config.yaml", "model.ckpt"),
             gated=False,
+            size_bytes=1_780_000_000,
             license_note="MIT",
         ),
     ),

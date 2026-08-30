@@ -198,7 +198,9 @@ def fake_spec(tmp_path: Path) -> InstallSpec:
         model_id="fakemodel",
         python_version="3.11",
         pip_packages=("nothing-real",),
-        source=SourceSpec(url="https://example.invalid/repo.git", commit="a" * 40),
+        sources=(
+            SourceSpec(url="https://example.invalid/repo.git", commit="a" * 40, directory="repo"),
+        ),
         weights=(),
         shims=(),
     )
@@ -212,6 +214,7 @@ def _install_with_fakes(
         dirs=(
             _site_packages(manager, spec.model_id),
             manager.source_dir(spec.model_id),
+            manager.source_dir(spec.model_id) / "repo",
         ),
         files=(manager.python_executable(spec.model_id),),
         freeze_output="torch==2.13.0\ntrimesh==4.4.0\n",
@@ -239,7 +242,7 @@ def test_install_records_the_pinned_commit(
     _install_with_fakes(manager, fake_spec, tmp_path, monkeypatch)
     manifest = manager.manifest("fakemodel")
     assert manifest is not None
-    assert manifest.source_commit == "a" * 40
+    assert manifest.source_commits == {"repo": "a" * 40}
 
 
 def test_install_reports_progress_for_each_phase(
@@ -372,9 +375,10 @@ def test_triposr_pins_an_exact_commit() -> None:
     claim VOLUM prints false."""
     spec = get_install_spec("triposr")
     assert spec is not None
-    assert spec.source is not None
-    assert len(spec.source.commit) == 40
-    assert spec.source.commit.isalnum()
+    assert spec.sources
+    for source in spec.sources:
+        assert len(source.commit) == 40, f"{source.directory} is not commit-pinned"
+        assert source.commit.isalnum()
 
 
 def test_triposr_pins_a_weight_revision() -> None:

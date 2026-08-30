@@ -14,6 +14,17 @@ dependencies = [
     "huggingface-hub>=0.24",
     "trimesh>=4.4",
     "numpy>=1.26",
+    # 3MF export is a zipped XML package; trimesh needs both for it.
+    "networkx>=3.0",
+    "lxml>=5.0",
+    # Manifold repair. Apache-2.0 with arm64 wheels. Deliberately NOT pymeshfix,
+    # which is the obvious choice and is AGPL-3.0 — copyleft in an MIT project.
+    "manifold3d>=3.0",
+    # Voxel remeshing needs a marching-cubes implementation and a binary fill.
+    # PyMCubes (BSD-3) rather than scikit-image: a fraction of the weight, and
+    # already proven on this hardware.
+    "PyMCubes>=0.1.6",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +40,17 @@ imaging = [
 mesh = [
     "trimesh>=4.4",
     "numpy>=1.26",
+    # 3MF export is a zipped XML package; trimesh needs both for it.
+    "networkx>=3.0",
+    "lxml>=5.0",
+    # Manifold repair. Apache-2.0 with arm64 wheels. Deliberately NOT pymeshfix,
+    # which is the obvious choice and is AGPL-3.0 — copyleft in an MIT project.
+    "manifold3d>=3.0",
+    # Voxel remeshing needs a marching-cubes implementation and a binary fill.
+    # PyMCubes (BSD-3) rather than scikit-image: a fraction of the weight, and
+    # already proven on this hardware.
+    "PyMCubes>=0.1.6",
+    "scipy>=1.11",
 ]
 dev = [
     "pytest>=8.2",
@@ -97,6 +119,11 @@ known-first-party = ["volum_core", "volum_cli", "volum_engine"]
 # own stubs fail to parse. The CI matrix covers both versions.
 strict = true
 warn_unreachable = true
+# trimesh ships partial annotations. Strict mode reports every call into an
+# unannotated helper at the call site, which would put a suppression on ordinary
+# mesh operations throughout the codebase. Excluding the callee is precise;
+# turning the rule off for our own modules would not be.
+untyped_calls_exclude = ["trimesh"]
 mypy_path = "src"
 packages = ["volum_core", "volum_cli", "volum_engine"]
 
@@ -112,6 +139,9 @@ module = [
     "numpy.*",
     "huggingface_hub.*",
     "PIL.*",
+    "manifold3d.*",
+    "scipy.*",
+    "mcubes.*",
     # The cloned upstream model implementation; present only in a provider venv.
     "tsr.*",
 ]

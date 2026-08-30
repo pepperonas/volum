@@ -1,1 +1,15 @@
-"""Placeholder package — implemented in a later step of Phase 3."""
+from .formats import (
+    PRINT_FORMATS,
+    ExportedFile,
+    ExportFormat,
+    ExportOptions,
+    export_mesh,
+)
+
+__all__ = [
+    "PRINT_FORMATS",
+    "ExportFormat",
+    "ExportOptions",
+    "ExportedFile",
+    "export_mesh",
+]
