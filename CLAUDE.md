@@ -28,7 +28,8 @@ Working today:
 # Engine (Python, uv)
 cd engine && uv sync && uv run pytest                  # all tests
 cd engine && uv run pytest tests/test_x.py::test_y     # one test
-cd engine && uv run ruff check . && uv run mypy .
+cd engine && uv run ruff check src tests && uv run --with mypy mypy
+cd engine && uv run --with mypy mypy --platform win32   # catches Windows-only type errors
 
 # Frontend
 cd apps/desktop && pnpm install && pnpm test           # Vitest

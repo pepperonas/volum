@@ -8,9 +8,9 @@ machine with 20 GB free, a half-finished 15 GB download is worse than a refusal.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -148,7 +148,11 @@ class ModelManager:
         when an installer needs it.
         """
         venv = self.venv_dir(model_id)
-        if sys.platform == "win32":
+        # os.name rather than sys.platform: mypy narrows sys.platform to the
+        # platform it is running on, so with warn_unreachable the other branch
+        # becomes an error — the code is correct, only unanalysable from one
+        # side. os.name carries the same meaning without the narrowing.
+        if os.name == "nt":
             return venv / "Scripts" / "python.exe"
         return venv / "bin" / "python"
 

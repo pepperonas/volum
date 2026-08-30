@@ -48,6 +48,18 @@ jobs:
       - name: Type check
         run: uv run --with mypy mypy
 
+      - name: Type check against the other target platforms
+        # mypy narrows sys.platform and os-specific branches to the platform it
+        # runs on, so a type error can exist on Windows and be invisible on
+        # Linux. Checking all three from one runner catches that in seconds
+        # instead of after a full matrix round trip.
+        if: runner.os == 'Linux'
+        run: |
+          for platform in win32 darwin linux; do
+            echo "--- $platform ---"
+            uv run --with mypy mypy --platform "$platform"
+          done
+
       - name: Test
         # No GPU on any runner, so GPU tests are excluded here by design and run
         # as an optional smoke test elsewhere (spec sections 37 and 38).
