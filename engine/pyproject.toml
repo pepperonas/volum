@@ -92,7 +92,9 @@ known-first-party = ["volum_core", "volum_cli", "volum_engine"]
 "src/volum_cli/main.py" = ["PLR0913", "PLR0917"]
 
 [tool.mypy]
-python_version = "3.11"
+# Deliberately not pinned: mypy should analyse against the interpreter it runs
+# on. Forcing 3.11 while a 3.12 environment supplies the stubs made numpy's
+# own stubs fail to parse. The CI matrix covers both versions.
 strict = true
 warn_unreachable = true
 mypy_path = "src"

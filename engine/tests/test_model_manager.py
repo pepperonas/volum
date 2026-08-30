@@ -9,8 +9,7 @@ The real download is covered by a marked integration test that CI skips.
 
 from __future__ import annotations
 
-import os
-import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,7 +27,13 @@ from volum_core.models.install_spec import (
     SourceSpec,
     WeightSpec,
 )
-from volum_core.models.manager import MANIFEST_FILE, SHIM_DIRECTORY, InstallManifest
+from volum_core.models.manager import (
+    MANIFEST_FILE,
+    SHIM_DIRECTORY,
+    CommandResult,
+    InstallManifest,
+    run_command,
+)
 
 
 @pytest.fixture
@@ -36,11 +41,42 @@ def manager(tmp_path: Path) -> ModelManager:
     return ModelManager(tmp_path / "models")
 
 
-def _fake_binary(path: Path, script: str) -> Path:
-    """Write an executable stand-in for uv or git."""
-    path.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    return path
+class FakeRunner:
+    """Stands in for the external commands an install shells out to.
+
+    Injected rather than faked on disk. Writing a fake executable works on
+    POSIX and cannot work on Windows — CreateProcess will not run a batch file
+    directly, which is how the Windows leg of CI failed. Injecting the runner
+    tests the orchestration (which commands, in what order, and what must exist
+    afterwards) without depending on the operating system at all.
+    """
+
+    def __init__(
+        self,
+        *,
+        dirs: tuple[Path, ...] = (),
+        files: tuple[Path, ...] = (),
+        fail_with: str | None = None,
+        freeze_output: str = "",
+    ) -> None:
+        self.dirs = dirs
+        self.files = files
+        self.fail_with = fail_with
+        self.freeze_output = freeze_output
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: list[str], timeout: float) -> CommandResult:
+        self.calls.append(args)
+        if self.fail_with is not None:
+            return CommandResult(returncode=1, stderr=self.fail_with)
+        if "freeze" in args:
+            return CommandResult(returncode=0, stdout=self.freeze_output)
+        for directory in self.dirs:
+            directory.mkdir(parents=True, exist_ok=True)
+        for file in self.files:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.touch()
+        return CommandResult(returncode=0)
 
 
 # --- layout and validation ------------------------------------------------
@@ -154,20 +190,15 @@ def fake_spec(tmp_path: Path) -> InstallSpec:
 def _install_with_fakes(
     manager: ModelManager, spec: InstallSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> list[tuple[str, str]]:
-    """Run an install with uv and git replaced by scripts that create the layout."""
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir(exist_ok=True)
-    venv_python = manager.venv_dir(spec.model_id) / "bin" / "python"
-    site_packages = manager.venv_dir(spec.model_id) / "lib" / "python3.11" / "site-packages"
-    _fake_binary(
-        bin_dir / "uv",
-        f'mkdir -p "{venv_python.parent}" "{site_packages}" && touch "{venv_python}" '
-        f'&& chmod +x "{venv_python}"',
+    """Run an install with every external command replaced."""
+    manager._run_command = FakeRunner(
+        dirs=(
+            manager.venv_dir(spec.model_id) / "lib" / "python3.11" / "site-packages",
+            manager.source_dir(spec.model_id),
+        ),
+        files=(manager.python_executable(spec.model_id),),
+        freeze_output="torch==2.13.0\ntrimesh==4.4.0\n",
     )
-    _fake_binary(bin_dir / "git", f'mkdir -p "{manager.source_dir(spec.model_id)}"')
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    manager._uv = str(bin_dir / "uv")
-
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: spec)
 
@@ -205,10 +236,7 @@ def test_a_failing_tool_leaves_no_manifest(
     manager: ModelManager, fake_spec: InstallSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The completion marker must not appear for a broken install."""
-    bin_dir = tmp_path / "failbin"
-    bin_dir.mkdir()
-    _fake_binary(bin_dir / "uv", "echo 'boom' >&2; exit 1")
-    manager._uv = str(bin_dir / "uv")
+    manager._run_command = FakeRunner(fail_with="boom")
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: fake_spec)
 
@@ -221,7 +249,11 @@ def test_a_failing_tool_leaves_no_manifest(
 def test_a_missing_tool_says_which_one(
     manager: ModelManager, fake_spec: InstallSpec, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    def missing(args: list[str], timeout: float) -> CommandResult:
+        raise FileNotFoundError(args[0])
+
     manager._uv = "/definitely/not/a/real/uv"
+    manager._run_command = missing
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: fake_spec)
     with pytest.raises(ModelInstallError, match="uv"):
@@ -236,11 +268,7 @@ def test_gated_weights_without_a_token_explain_themselves(
         model_id="gatedmodel",
         weights=(WeightSpec(repo_id="meta/gated", revision="abc", files=("w.bin",), gated=True),),
     )
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    venv_python = manager.venv_dir("gatedmodel") / "bin" / "python"
-    _fake_binary(bin_dir / "uv", f'mkdir -p "{venv_python.parent}" && touch "{venv_python}"')
-    manager._uv = str(bin_dir / "uv")
+    manager._run_command = FakeRunner(files=(manager.python_executable("gatedmodel"),))
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: spec)
 
@@ -265,14 +293,11 @@ def test_shims_are_copied_into_the_provider_environment(
             ),
         ),
     )
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
     venv = manager.venv_dir("shimmed")
-    _fake_binary(
-        bin_dir / "uv",
-        f'mkdir -p "{venv}/bin" "{venv}/lib/python3.11/site-packages" && touch "{venv}/bin/python"',
+    manager._run_command = FakeRunner(
+        dirs=(venv / "lib" / "python3.11" / "site-packages",),
+        files=(manager.python_executable("shimmed"),),
     )
-    manager._uv = str(bin_dir / "uv")
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: spec)
 
@@ -360,3 +385,42 @@ def test_every_shim_file_exists() -> None:
         for shim in spec.shims:
             assert (SHIM_DIRECTORY / shim.source_file).exists()
             assert shim.reason, "a shim must say why it exists"
+
+
+# --- the real runner ------------------------------------------------------
+#
+# The tests above inject a fake runner so install orchestration can be checked
+# without spawning processes. These cover the runner itself, using the current
+# interpreter so they work identically on every platform in the matrix.
+
+
+def test_the_real_runner_captures_output() -> None:
+    result = run_command([sys.executable, "-c", "print('hello')"], 30)
+    assert result.returncode == 0
+    assert "hello" in result.stdout
+
+
+def test_the_real_runner_reports_failure_without_raising() -> None:
+    """Failures come back as data, so _run can turn them into a message with
+    the command's own stderr in it."""
+    result = run_command(
+        [sys.executable, "-c", "import sys; sys.stderr.write('bad'); sys.exit(2)"], 30
+    )
+    assert result.returncode == 2
+    assert "bad" in result.stderr
+
+
+def test_the_real_runner_raises_for_a_missing_binary() -> None:
+    with pytest.raises(FileNotFoundError):
+        run_command(["/definitely/not/a/real/binary"], 30)
+
+
+def test_install_records_the_resolved_environment(
+    manager: ModelManager, fake_spec: InstallSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The install spec cannot carry upstream's own pins, so the manifest records
+    what was actually resolved. Without it a result is not explicable later."""
+    _install_with_fakes(manager, fake_spec, tmp_path, monkeypatch)
+    manifest = manager.manifest("fakemodel")
+    assert manifest is not None
+    assert "torch==2.13.0" in manifest.frozen_requirements

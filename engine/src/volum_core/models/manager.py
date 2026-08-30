@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -79,6 +80,29 @@ class ModelInstallError(RuntimeError):
 InstallProgress = Callable[[str, str], None]
 
 
+class CommandResult(BaseModel):
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+#: Runs one external command. Injectable so install orchestration can be tested
+#: without spawning processes — which also removes a real platform problem:
+#: faking an executable on Windows is not possible in the way it is on POSIX,
+#: because CreateProcess will not run a batch file directly.
+CommandRunner = Callable[[list[str], float], CommandResult]
+
+
+def run_command(args: list[str], timeout: float) -> CommandResult:
+    """The real runner. Fixed argv, never a shell (spec section 50)."""
+    result = subprocess.run(  # noqa: S603
+        args, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    return CommandResult(
+        returncode=result.returncode, stdout=result.stdout or "", stderr=result.stderr or ""
+    )
+
+
 def _noop(step: str, message: str) -> None:
     return None
 
@@ -86,10 +110,17 @@ def _noop(step: str, message: str) -> None:
 class ModelManager:
     """Owns ``<data>/models/``."""
 
-    def __init__(self, models_root: Path, *, uv_binary: str | None = None) -> None:
+    def __init__(
+        self,
+        models_root: Path,
+        *,
+        uv_binary: str | None = None,
+        runner: CommandRunner | None = None,
+    ) -> None:
         self.root = models_root
         self.root.mkdir(parents=True, exist_ok=True)
         self._uv = uv_binary or shutil.which("uv") or "uv"
+        self._run_command = runner or run_command
 
     # --- layout -----------------------------------------------------------
 
@@ -109,9 +140,17 @@ class ModelManager:
         return self.directory(model_id) / "weights"
 
     def python_executable(self, model_id: str) -> Path:
+        """Where the provider's interpreter lives.
+
+        Decided by platform, not by what happens to exist. The earlier
+        existence check returned the Windows path on macOS whenever it was
+        called before the environment had been created — which is precisely
+        when an installer needs it.
+        """
         venv = self.venv_dir(model_id)
-        candidate = venv / "bin" / "python"
-        return candidate if candidate.exists() else venv / "Scripts" / "python.exe"
+        if sys.platform == "win32":
+            return venv / "Scripts" / "python.exe"
+        return venv / "bin" / "python"
 
     # --- state ------------------------------------------------------------
 
@@ -157,11 +196,9 @@ class ModelManager:
     # --- install ----------------------------------------------------------
 
     def _run(self, args: list[str], step: str) -> None:
-        """Run an install command. Fixed argv, never a shell (spec section 50)."""
+        """Run an install command through the injected runner."""
         try:
-            result = subprocess.run(  # noqa: S603
-                args, capture_output=True, text=True, timeout=_INSTALL_TIMEOUT_S, check=False
-            )
+            result = self._run_command(args, _INSTALL_TIMEOUT_S)
         except FileNotFoundError as exc:
             raise ModelInstallError(
                 f"A tool needed to install this model is missing: {args[0]}.",
@@ -284,12 +321,9 @@ class ModelManager:
         """Capture the resolved package versions. Best effort — a failure here
         costs provenance, not the install."""
         try:
-            result = subprocess.run(  # noqa: S603
+            result = self._run_command(
                 [self._uv, "pip", "freeze", "--python", str(self.python_executable(model_id))],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
+                120,
             )
         except (OSError, subprocess.SubprocessError):
             return []
