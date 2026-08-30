@@ -70,6 +70,13 @@ src = ["src", "tests"]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RUF", "S", "PL"]
 ignore = ["A003", "PLR0911", "PLR0912"]
 
+[tool.ruff.lint.isort]
+# Declared rather than detected. Ruff infers first-party packages from the
+# filesystem, so a checkout with a built virtualenv classifies volum_* as
+# first-party while a clean one does not — which made lint pass locally and
+# fail in CI on identical files.
+known-first-party = ["volum_core", "volum_cli", "volum_engine"]
+
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, and reach into private helpers on purpose.
 "tests/**" = ["S101", "SLF001", "PLR2004", "PLR0913"]
