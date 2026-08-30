@@ -1,1 +1,3 @@
-"""Placeholder package — implemented in a later step of Phase 3."""
+from .mesh import QualityReport, ValidationIssue, load_report, validate_asset
+
+__all__ = ["QualityReport", "ValidationIssue", "load_report", "validate_asset"]

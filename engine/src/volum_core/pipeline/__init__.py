@@ -1,1 +1,3 @@
-"""Placeholder package — implemented in a later step of Phase 3."""
+from .run import AssetMetadata, PipelineResult, read_asset_metadata, run_pipeline
+
+__all__ = ["AssetMetadata", "PipelineResult", "read_asset_metadata", "run_pipeline"]

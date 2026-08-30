@@ -194,3 +194,13 @@ class ImageTo3DProvider(ABC):
     @abstractmethod
     def cleanup(self) -> None:
         """Release models and GPU memory. Called after every job."""
+
+    def cancel(self) -> None:
+        """Stop a running generation.
+
+        Concrete rather than abstract, with a no-op default: a provider that
+        genuinely cannot be interrupted says so by not overriding this, instead
+        of the caller having to guess. Providers that run out of process
+        override it by terminating the worker.
+        """
+        return None

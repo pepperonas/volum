@@ -11,6 +11,9 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "psutil>=5.9",
+    "huggingface-hub>=0.24",
+    "trimesh>=4.4",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +50,9 @@ path = "src/volum_core/version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/volum_core", "src/volum_cli", "src/volum_engine"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/volum_core/providers/shims" = "volum_core/providers/shims"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
@@ -67,6 +73,13 @@ ignore = ["A003", "PLR0911", "PLR0912"]
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, and reach into private helpers on purpose.
 "tests/**" = ["S101", "SLF001", "PLR2004", "PLR0913"]
+# Worker scripts run in a *provider's* virtual environment, not the engine's.
+# Their imports must happen after sys.path is prepared and are unavailable here,
+# so module-level imports are wrong by construction.
+"src/volum_core/providers/workers/*" = ["PLC0415"]
+# A CLI command's parameters ARE its flags; counting them as a code smell would
+# only push the flags somewhere the framework cannot see them.
+"src/volum_cli/main.py" = ["PLR0913", "PLR0917"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -78,5 +91,16 @@ packages = ["volum_core", "volum_cli", "volum_engine"]
 [[tool.mypy.overrides]]
 # Optional runtime probes: deliberately absent from the engine environment,
 # because the ML stack lives in per-provider virtualenvs.
-module = ["psutil.*", "trimesh.*", "torch.*", "mlx.*"]
+module = [
+    "psutil.*",
+    "trimesh.*",
+    "torch.*",
+    "mlx.*",
+    "mcubes.*",
+    "numpy.*",
+    "huggingface_hub.*",
+    "PIL.*",
+    # The cloned upstream model implementation; present only in a provider venv.
+    "tsr.*",
+]
 ignore_missing_imports = true
