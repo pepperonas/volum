@@ -25,6 +25,7 @@ from .registry import get_model
 
 MANIFEST_FILE = "install.json"
 SHIM_DIRECTORY = Path(__file__).resolve().parent.parent / "providers" / "shims"
+CONFIG_DIRECTORY = Path(__file__).resolve().parent / "pipeline_configs"
 
 #: Installs pull large files and build environments; a short timeout would turn
 #: a slow connection into a failure.
@@ -62,6 +63,13 @@ class InstallManifest(BaseModel):
     )
     weight_revisions: dict[str, str] = Field(default_factory=dict)
     shims: list[str] = Field(default_factory=list)
+    config_files: list[str] = Field(default_factory=list)
+    worker_env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment the worker needs. Backends are chosen through "
+        "environment variables read at import time, so this belongs to the install "
+        "rather than to a single run.",
+    )
     frozen_requirements: list[str] = Field(
         default_factory=list,
         description="The exact resolved environment. The install spec deliberately "
@@ -143,6 +151,15 @@ class ModelManager:
 
     def weights_dir(self, model_id: str) -> Path:
         return self.directory(model_id) / "weights"
+
+    def hf_cache_dir(self, model_id: str) -> Path:
+        """The model's own Hugging Face cache.
+
+        Kept per model rather than shared so that removing a model actually frees
+        its disk, and so an install stays offline-capable: weights loaded by
+        repository name resolve here instead of being fetched again on first run.
+        """
+        return self.directory(model_id) / "hf-cache"
 
     def python_executable(self, model_id: str) -> Path:
         """Where the provider's interpreter lives.
@@ -290,6 +307,7 @@ class ModelManager:
         frozen = self._freeze(spec.model_id)
         revisions = self._fetch_weights(spec, on_progress, hf_token)
         shims = self._write_shims(spec, on_progress)
+        configs = self._write_config_files(spec, on_progress)
 
         manifest = InstallManifest(
             model_id=model_id,
@@ -299,6 +317,8 @@ class ModelManager:
             skipped_components=skipped,
             weight_revisions=revisions,
             shims=shims,
+            config_files=configs,
+            worker_env=dict(spec.worker_env),
             frozen_requirements=frozen,
         )
         # Written last: its presence is what marks the install complete.
@@ -443,7 +463,10 @@ class ModelManager:
         if not spec.weights:
             return {}
         try:
-            from huggingface_hub import hf_hub_download  # noqa: PLC0415 - optional at import
+            from huggingface_hub import (  # noqa: PLC0415 - optional at import
+                hf_hub_download,
+                snapshot_download,
+            )
         except ImportError as exc:
             raise ModelInstallError(
                 "Downloading model weights needs the huggingface-hub package.",
@@ -453,6 +476,8 @@ class ModelManager:
         target = self.weights_dir(spec.model_id)
         target.mkdir(parents=True, exist_ok=True)
         revisions: dict[str, str] = {}
+
+        cache_dir = self.hf_cache_dir(spec.model_id)
 
         for weight in spec.weights:
             if weight.gated and not token:
@@ -465,6 +490,24 @@ class ModelManager:
                         "Add your Hugging Face token in Settings.",
                     ],
                 )
+            if weight.into_cache:
+                on_progress("weights", f"Downloading {weight.repo_id}")
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    snapshot_download(
+                        repo_id=weight.repo_id,
+                        revision=weight.revision,
+                        cache_dir=str(cache_dir),
+                        token=token,
+                    )
+                except Exception as exc:
+                    raise self._download_error(weight.repo_id, exc, gated=weight.gated) from exc
+                revisions[weight.repo_id] = weight.revision
+                continue
+
+            destination = (
+                target / weight.target_subdirectory if weight.target_subdirectory else target
+            )
             for filename in weight.files:
                 on_progress("weights", f"Downloading {filename} from {weight.repo_id}")
                 try:
@@ -472,17 +515,50 @@ class ModelManager:
                         repo_id=weight.repo_id,
                         filename=filename,
                         revision=weight.revision,
-                        local_dir=str(target),
+                        local_dir=str(destination),
                         token=token,
                     )
                 except Exception as exc:
-                    raise ModelInstallError(
-                        f"Could not download {filename} from {weight.repo_id}.",
-                        technical=f"{type(exc).__name__}: {exc}",
-                        suggestions=["Check your network connection.", "Try again."],
-                    ) from exc
+                    raise self._download_error(weight.repo_id, exc, gated=weight.gated) from exc
             revisions[weight.repo_id] = weight.revision
         return revisions
+
+    def _download_error(self, repo_id: str, exc: Exception, *, gated: bool) -> ModelInstallError:
+        """Turn a hub failure into something a user can act on.
+
+        A gated repository refuses with an authorisation error that reads like a
+        bug. Naming the page to visit is the difference between a dead end and a
+        two-minute fix.
+        """
+        suggestions = ["Check your network connection.", "Try again."]
+        if gated:
+            suggestions = [
+                f"Open https://huggingface.co/{repo_id} and request access.",
+                "Access there is granted by a person and can take a while.",
+                "Then add your Hugging Face token in Settings.",
+            ]
+        return ModelInstallError(
+            f"Could not download {repo_id}.",
+            technical=f"{type(exc).__name__}: {exc}",
+            suggestions=suggestions,
+        )
+
+    def _write_config_files(self, spec: InstallSpec, on_progress: InstallProgress) -> list[str]:
+        """Install VOLUM's own configuration alongside the weights."""
+        written: list[str] = []
+        for config in spec.config_files:
+            source = CONFIG_DIRECTORY / config.source_file
+            if not source.exists():
+                raise ModelInstallError(
+                    f"Missing configuration file {config.source_file}.",
+                    technical=f"Expected at {source}",
+                )
+            target = self.weights_dir(spec.model_id) / config.target
+            target.parent.mkdir(parents=True, exist_ok=True)
+            on_progress("config", f"Writing {config.target}")
+            shutil.copyfile(source, target)
+            written.append(config.target)
+        return written
 
     def _write_shims(self, spec: InstallSpec, on_progress: InstallProgress) -> list[str]:
         """Copy compatibility modules into the provider's site-packages.

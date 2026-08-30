@@ -93,6 +93,7 @@ class TripoSRProvider(ImageTo3DProvider):
             request=request,
             source_dir=self._manager.source_dir(model_id),
             weights_dir=self._manager.weights_dir(model_id),
+            hf_cache_dir=None,
             device=self._device,
             on_progress=on_progress,
             timeout_seconds=_TIMEOUT_S,

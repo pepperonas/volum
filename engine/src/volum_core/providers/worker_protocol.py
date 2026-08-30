@@ -31,6 +31,9 @@ class WorkerRequest(BaseModel):
     output_dir: str
     source_dir: str
     weights_dir: str
+    #: The install's own Hugging Face cache. Set so a model that loads weights by
+    #: repository name resolves locally instead of downloading them again.
+    hf_cache_dir: str | None = None
     device: str = "cpu"
     seed: int | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)

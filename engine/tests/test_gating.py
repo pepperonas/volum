@@ -228,8 +228,12 @@ def test_trellis2_is_blocked_on_a_small_machine() -> None:
 
 
 def test_trellis2_is_blocked_when_the_disk_is_too_full() -> None:
-    """29 GB free is fine; 15 GB is not. Real constraint on the dev machine."""
-    assert assess(TRELLIS2, make_hardware(ram_gib=16, disk_free_gib=15)).verdict is Verdict.BLOCKED
+    """A real constraint on the development machine, and the reason the install
+    fetches the geometry models only: the full set does not fit."""
+    assert assess(TRELLIS2, make_hardware(ram_gib=16, disk_free_gib=8)).verdict is Verdict.BLOCKED
+    assert assess(TRELLIS2, make_hardware(ram_gib=16, disk_free_gib=14)).verdict is not (
+        Verdict.BLOCKED
+    )
 
 
 @pytest.mark.parametrize("model", [TRELLIS2, TRIPOSR])

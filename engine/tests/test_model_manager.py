@@ -175,18 +175,20 @@ def test_preflight_rejects_an_unknown_model(manager: ModelManager) -> None:
         manager.preflight("no-such-model")
 
 
-def test_preflight_rejects_a_model_without_an_installer(manager: ModelManager) -> None:
-    """TRELLIS.2 is in the registry but has no installer yet. Saying so beats
-    failing halfway through an install."""
+def test_preflight_rejects_a_registered_model_without_an_installer(
+    manager: ModelManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Saying so beats failing halfway through a multi-gigabyte install."""
+    monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: None)
     with pytest.raises(ModelInstallError, match="no installer yet"):
-        manager.preflight("trellis2")
+        manager.preflight("triposr")
 
 
-def test_preflight_error_carries_suggestions(manager: ModelManager) -> None:
+def test_preflight_error_carries_something_to_act_on(manager: ModelManager) -> None:
     """A refusal the user cannot act on is not much better than a crash."""
     with pytest.raises(ModelInstallError) as excinfo:
-        manager.preflight("trellis2")
-    assert excinfo.value.technical
+        manager.preflight("no-such-model")
+    assert excinfo.value.message
 
 
 # --- install orchestration ------------------------------------------------

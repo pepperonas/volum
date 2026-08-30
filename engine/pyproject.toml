@@ -142,7 +142,10 @@ module = [
     "manifold3d.*",
     "scipy.*",
     "mcubes.*",
-    # The cloned upstream model implementation; present only in a provider venv.
+    # Cloned upstream model implementations and Metal extensions; present only
+    # inside a provider virtualenv, never in the engine.
     "tsr.*",
+    "trellis2.*",
+    "flex_gemm.*",
 ]
 ignore_missing_imports = true

@@ -57,6 +57,14 @@ class WeightSpec(BaseModel):
         description="Where the files must land relative to the weights directory. "
         "Model code often expects an exact layout.",
     )
+    into_cache: bool = Field(
+        default=False,
+        description="Fetch the whole repository into the model's own Hugging Face "
+        "cache instead of copying files into the weights directory. Needed for "
+        "weights the model loads by repository name rather than by path — putting "
+        "them anywhere else means the first run silently downloads them again, and "
+        "the install is not offline-capable as promised.",
+    )
 
 
 class SourceSpec(BaseModel):
@@ -136,6 +144,20 @@ class ShimSpec(BaseModel):
     reason: str = Field(description="Shown to the user. Why the substitution exists.")
 
 
+class ConfigFile(BaseModel):
+    """A configuration file VOLUM writes into the weights directory.
+
+    Not a patch of upstream code — a configuration of our own, alongside the
+    weights we actually downloaded. It is how a model gets installed in a
+    reduced form (geometry without texturing) and how a dependency with an
+    unacceptable licence gets swapped for an equivalent one.
+    """
+
+    source_file: str = Field(description="File name under models/pipeline_configs/.")
+    target: str = Field(description="Path relative to the model's weights directory.")
+    reason: str = Field(description="Why it differs from upstream. Shown to the user.")
+
+
 class InstallSpec(BaseModel):
     model_id: str
     python_version: str = Field(default="3.11")
@@ -144,6 +166,7 @@ class InstallSpec(BaseModel):
     weights: tuple[WeightSpec, ...] = ()
     shims: tuple[ShimSpec, ...] = ()
     prerequisites: tuple[Prerequisite, ...] = ()
+    config_files: tuple[ConfigFile, ...] = ()
     #: Environment the worker needs. Backend selection for these models happens
     #: through environment variables read at import time, so it has to be part
     #: of the install record rather than passed per run.
@@ -224,7 +247,162 @@ TRIPOSR_INSTALL = InstallSpec(
 )
 
 
-INSTALL_SPECS: dict[str, InstallSpec] = {TRIPOSR_INSTALL.model_id: TRIPOSR_INSTALL}
+TRELLIS2_INSTALL = InstallSpec(
+    model_id="trellis2",
+    python_version="3.11",
+    pip_packages=(
+        "torch",
+        "torchvision",
+        "transformers",
+        "accelerate",
+        "huggingface_hub",
+        "safetensors",
+        "pillow",
+        "numpy",
+        "trimesh",
+        "scipy",
+        "tqdm",
+        "easydict",
+        "kornia",
+        "timm",
+        "imageio",
+        "opencv-python-headless",
+        "xatlas",
+        "fast-simplification",
+    ),
+    sources=(
+        # The Apple Silicon port. It owns the MPS patches and the entry point;
+        # everything else is a dependency it expects to find beside it.
+        SourceSpec(
+            url="https://github.com/shivampkumar/trellis-mac",
+            commit="d58628f4f5b9c3de8274cb110074154f4b31cef2",
+            directory="trellis-mac",
+        ),
+        SourceSpec(
+            url="https://github.com/microsoft/TRELLIS.2",
+            commit="75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+            directory="trellis-mac/TRELLIS.2",
+        ),
+        SourceSpec(
+            url="https://github.com/EasternJournalist/utils3d",
+            commit="9a4eb15e4021b67b12c460c7057d642626897ec8",
+            directory="trellis-mac/deps/utils3d",
+            pip_install=True,
+        ),
+        # Metal accelerators. Optional in the strict sense: each has a software
+        # fallback, and none of them can build without an Xcode Metal toolchain.
+        # They only affect texture baking, which STL cannot carry anyway.
+        *(
+            SourceSpec(
+                url=f"https://github.com/pedronaugusto/{name}",
+                commit=commit,
+                directory=f"trellis-mac/deps/{name}",
+                pip_install=True,
+                no_build_isolation=True,
+                optional=True,
+                requires=("metal-toolchain",),
+                # PyTorch's MPS headers need macOS 12; some interpreters set a
+                # lower minimum and the compiler rejects the headers outright.
+                build_env={"MACOSX_DEPLOYMENT_TARGET": "12.0"},
+            )
+            for name, commit in (
+                ("mtlbvh", "6b2a0f63b476ad8225695d092902104beafd7f58"),
+                ("mtldiffrast", "c9499ba2e4ed6849e95ce5da7aae5bf61addb528"),
+                ("mtlmesh", "7de3864f783407201486bf6c900a4bd76a4018a3"),
+                ("mtlgemm", "566c133781ce4992de3f77c3a97dd6feaae9d013"),
+            )
+        ),
+    ),
+    weights=(
+        WeightSpec(
+            repo_id="microsoft/TRELLIS.2-4B",
+            revision="5b521936b01fbe1890f6f9baed0254ab6351c04a",
+            # The geometry half only. The texture models are another 2.9 GB and
+            # produce PBR maps that neither STL nor this install can use: baking
+            # them needs the Metal toolchain, and STL carries no colour at all.
+            files=(
+                "ckpts/ss_flow_img_dit_1_3B_64_bf16.json",
+                "ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors",
+                "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.json",
+                "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.safetensors",
+                "ckpts/shape_dec_next_dc_f16c32_fp16.json",
+                "ckpts/shape_dec_next_dc_f16c32_fp16.safetensors",
+            ),
+            size_bytes=6_066_000_000,
+            license_note="MIT",
+        ),
+        WeightSpec(
+            repo_id="microsoft/TRELLIS-image-large",
+            revision="main",
+            # The sparse-structure decoder lives in the older repository; the
+            # 4B pipeline references it across repositories.
+            files=(
+                "ckpts/ss_dec_conv3d_16l8_fp16.json",
+                "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+            ),
+            size_bytes=150_000_000,
+            license_note="MIT",
+        ),
+        WeightSpec(
+            repo_id="facebook/dinov3-vitl16-pretrain-lvd1689m",
+            revision="main",
+            into_cache=True,
+            gated=True,
+            manual_approval=True,
+            size_bytes=1_213_000_000,
+            license_note="DINOv3 License - commercial use permitted, requires "
+            "the notice 'Built with DINOv3'",
+        ),
+        WeightSpec(
+            repo_id="ZhengPeng7/BiRefNet",
+            revision="main",
+            into_cache=True,
+            size_bytes=440_000_000,
+            # Substituted for briaai/RMBG-2.0, which the upstream config names and
+            # which is CC BY-NC and gated. Same class, and its own default.
+            license_note="MIT - replaces the non-commercial RMBG-2.0",
+        ),
+    ),
+    prerequisites=(
+        Prerequisite(
+            name="metal-toolchain",
+            description="The Xcode Metal compiler is not available",
+            probe=("xcrun", "-sdk", "macosx", "metal", "--version"),
+            remedy=(
+                "Install Xcode (not just the Command Line Tools) and run "
+                "'xcodebuild -downloadComponent MetalToolchain'."
+            ),
+            required=False,
+            consequence_if_missing=(
+                "texture baking runs on a slower software path with visible "
+                "artefacts. Geometry, and therefore STL and 3MF output, is unaffected."
+            ),
+        ),
+    ),
+    config_files=(
+        ConfigFile(
+            source_file="trellis2_geometry_512.json",
+            target="pipeline.json",
+            reason=(
+                "Loads only the models VOLUM downloaded (geometry at 512) and points "
+                "background removal at BiRefNet, which is MIT and ungated, instead of "
+                "RMBG-2.0, which is CC BY-NC and gated."
+            ),
+        ),
+    ),
+    worker_env={
+        # Several operations have no MPS kernel; without this they raise instead
+        # of falling back to the CPU. Must be set before torch is imported.
+        "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+        "ATTN_BACKEND": "sdpa",
+        "SPARSE_ATTN_BACKEND": "sdpa",
+    },
+)
+
+
+INSTALL_SPECS: dict[str, InstallSpec] = {
+    spec.model_id: spec for spec in (TRIPOSR_INSTALL, TRELLIS2_INSTALL)
+}
 
 
 def get_install_spec(model_id: str) -> InstallSpec | None:

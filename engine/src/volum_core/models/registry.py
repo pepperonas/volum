@@ -53,30 +53,39 @@ TRELLIS2 = ProviderMetadata(
         supported_runtimes=frozenset({"mps", "cuda"}),
         minimum_memory_bytes=16 * GIB,
         estimated_peak_memory_bytes=18 * GIB,
-        disk_bytes=21 * GIB,
+        disk_bytes=11 * GIB,
         requires_gated_download=True,  # DINOv3 conditioner is gated on Hugging Face
         numbers_source=(
-            "Upstream claims, not VOLUM measurements. microsoft/TRELLIS.2 states "
-            "'at least 24GB' for CUDA; shivampkumar/trellis-mac reports a ~18 GB peak "
-            "and ~15 GB of weights on Apple Silicon, plus room for the provider "
-            "environment. No published figure exists for 16 GB machines."
+            "Disk measured from the model host: 7.33 GB of weights for the "
+            "geometry-only 512 pipeline, plus roughly 3 GB for the provider "
+            "environment. The full 15.1 GB set includes 1024 and texture models "
+            "that STL cannot carry and that this install does not fetch. Memory is "
+            "still an upstream claim: shivampkumar/trellis-mac reports a ~18 GB peak "
+            "on Apple Silicon, and no figure exists for 16 GB machines."
         ),
     ),
     license=LicenseMetadata(
         code_license="MIT",
         weights_license="MIT",
-        commercial_use=CommercialUse.UNKNOWN,
+        commercial_use=CommercialUse.CONDITIONAL,
         commercial_use_detail=(
-            "The model itself is MIT. The pipeline is not settled: the official CUDA "
-            "path depends on nvdiffrast, which is non-commercial. The Apple Silicon "
-            "path replaces it with mtldiffrast, whose own licence has not been "
-            "verified. Until it is, VOLUM makes no commercial-use claim here."
+            "MIT throughout on the Apple Silicon path, which is the one VOLUM installs. "
+            "Three conditions. The official CUDA pipeline is excluded: it depends on "
+            "nvdiffrast, which is non-commercial. The 'Built with DINOv3' notice must be "
+            "displayed. And background removal must use BiRefNet, not the RMBG-2.0 that "
+            "the upstream config names, which is CC BY-NC — VOLUM substitutes it."
         ),
         attribution_required="Built with DINOv3",
         dependency_licenses={
-            "nvdiffrast": "NVIDIA Source Code License (1-Way Commercial) - NON-COMMERCIAL",
-            "mtldiffrast": "UNKNOWN - blocking for any commercial claim",
-            "mtlgemm": "UNKNOWN",
+            "nvdiffrast": "NVIDIA Source Code License (1-Way Commercial) - NON-COMMERCIAL, "
+            "CUDA path only; not installed on Apple Silicon",
+            "mtldiffrast": "MIT - implemented from the Laine et al. 2020 paper, only "
+            "API-compatible with nvdiffrast, so not a derivative of it",
+            "mtlgemm": "MIT",
+            "mtlbvh": "MIT",
+            "mtlmesh": "MIT",
+            "trellis2-apple": "MIT (fork of the MIT-licensed TRELLIS.2)",
+            "utils3d": "MIT",
             "DINOv3": "DINOv3 License - commercial use permitted, attribution required, gated",
             "BiRefNet": "MIT (VOLUM substitutes this for RMBG-2.0, which is CC BY-NC)",
         },

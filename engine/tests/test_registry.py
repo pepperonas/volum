@@ -66,11 +66,25 @@ def test_no_v1_provider_claims_multi_image() -> None:
         assert Capability.MULTI_IMAGE not in model.capabilities
 
 
-def test_trellis2_does_not_claim_commercial_use() -> None:
-    """Its MIT weights sit behind an unverified rasteriser licence. Until that is
-    settled the only honest answer is 'unknown' (spec section 10)."""
-    assert TRELLIS2.license.commercial_use is CommercialUse.UNKNOWN
-    assert "mtldiffrast" in TRELLIS2.license.dependency_licenses
+def test_trellis2_commercial_use_is_conditional_and_says_why() -> None:
+    """It was UNKNOWN until the Metal replacements were checked: mtldiffrast and
+    friends are MIT, and mtldiffrast is implemented from the paper rather than
+    ported from NVIDIA's code, so nvdiffrast's non-commercial clause does not
+    reach the Apple path. Conditional, not allowed: the CUDA path is still
+    blocked, DINOv3 needs its notice, and RMBG-2.0 must stay substituted."""
+    assert TRELLIS2.license.commercial_use is CommercialUse.CONDITIONAL
+    detail = TRELLIS2.license.commercial_use_detail or ""
+    assert "nvdiffrast" in detail
+    assert "DINOv3" in detail
+    assert "BiRefNet" in detail
+
+
+def test_the_metal_replacements_are_recorded_as_mit() -> None:
+    """The finding that unblocked commercial use. Losing it would lose the reason
+    the Apple path is preferred over the CUDA one."""
+    licences = TRELLIS2.license.dependency_licenses
+    for package in ("mtldiffrast", "mtlgemm", "mtlbvh", "mtlmesh"):
+        assert licences[package].startswith("MIT"), package
 
 
 def test_trellis2_records_the_nvdiffrast_problem() -> None:

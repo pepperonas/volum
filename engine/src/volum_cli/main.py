@@ -29,7 +29,7 @@ from volum_core.models import (
 )
 from volum_core.pipeline import PipelineResult, run_pipeline
 from volum_core.providers import Verdict
-from volum_core.providers.triposr import TripoSRProvider
+from volum_core.providers.factory import available_provider_ids, create_provider
 from volum_core.providers.types import CommercialUse, ProviderMetadata
 from volum_core.version import __version__
 
@@ -455,10 +455,6 @@ def generate(
         )
         raise typer.Exit(1)
 
-    if model != "triposr":
-        err_console.print(f"[red]No provider implementation for '{model}' yet.[/red]")
-        raise typer.Exit(1)
-
     if len(images) > 1:
         # Said out loud rather than quietly ignored: TripoSR is single-image,
         # and silently using the first would be the simulated multi-image
@@ -485,7 +481,15 @@ def generate(
 
     console.print(f"Job [bold]{record.id[:12]}[/bold] on [cyan]{chosen_device}[/cyan]")
 
-    provider = TripoSRProvider(manager, device=chosen_device)
+    provider = create_provider(model, manager, device=chosen_device)
+    if provider is None:
+        known = ", ".join(available_provider_ids())
+        err_console.print(
+            f"[red]'{model}' is in the catalogue but has no implementation yet.[/red]\n"
+            f"  Available: {known}"
+        )
+        raise typer.Exit(1)
+
     with console.status("Starting...") as status:
         result = run_pipeline(
             manager=jobs,
