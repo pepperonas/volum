@@ -5,10 +5,14 @@
 Turn one or more photographs into a usable, textured 3D asset — entirely on your own
 machine. No cloud, no account, no telemetry, no remote inference.
 
-> **Status: pre-implementation.** Research and architecture are complete; no code has been
-> written yet. See [`docs/decision.md`](docs/decision.md) for the technical plan and
-> [`docs/research.md`](docs/research.md) for the model survey it rests on.
-> Nothing here works yet — this README describes what is being built, not what ships.
+> **Status: early. The engine works; the desktop app does not exist yet.**
+>
+> Working today, from the command line: hardware detection and `volum doctor`, the model
+> manager, and real single-image generation to a validated GLB. Measured on an M1 Pro
+> (16 GB, macOS 26.6.2) over MPS: **63 s, 23,095 vertices** with TripoSR.
+>
+> Not built yet: the Tauri desktop application, the local HTTP engine and the 3D viewer.
+> See [`docs/decision.md`](docs/decision.md) for the plan.
 
 ## What VOLUM is meant to be
 
@@ -40,6 +44,19 @@ Tauri 2 · React + TypeScript + Vite · Tailwind + shadcn/ui · Three.js / React
 Python engine (`uv`) · SQLite · pytest / Vitest / Playwright · GitHub Actions ·
 Semantic Versioning + Conventional Commits. Primary export: **GLB**.
 
+## Try it
+
+```bash
+cd engine
+uv sync --extra dev
+uv run volum doctor                  # what your machine can run
+uv run volum models install triposr  # ~2.5 GB, downloaded on request only
+uv run volum generate photo.png
+```
+
+Images with a transparent background work best — VOLUM does not yet separate the subject
+for you, and it says so rather than pretending otherwise.
+
 ## Documentation
 
 | Document | Contents |
@@ -48,6 +65,7 @@ Semantic Versioning + Conventional Commits. Primary export: **GLB**.
 | [`docs/research.md`](docs/research.md) | Model survey, primary-source verified, dated |
 | [`docs/model-evaluation.md`](docs/model-evaluation.md) | Capability / hardware / licence matrices |
 | [`docs/licenses.md`](docs/licenses.md) | Per-artifact licence inventory including dependencies |
+| [`docs/integration-notes.md`](docs/integration-notes.md) | Findings that cost time to establish: MPS on macOS 26, dependency pins, substitutions |
 | [`docs/audit-phase0.md`](docs/audit-phase0.md) | Environment and hardware audit |
 | [`docs/adr/`](docs/adr/) | Architecture decision records |
 

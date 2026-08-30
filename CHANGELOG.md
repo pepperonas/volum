@@ -24,3 +24,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Relocatable data directory with atomic settings and path-traversal guards.
 - Version single source of truth (`scripts/sync_version.py`) and CI across
   Linux, macOS (Apple Silicon) and Windows on Python 3.11 and 3.12.
+- Job system: persisted records, an explicit state machine that cannot move
+  backwards, stage-based progress, and cancellation that both stops at stage
+  boundaries and terminates the worker.
+- Model manager: per-provider virtual environments, sources pinned to a commit,
+  weights downloaded only on request, gated-download handling, verification,
+  removal and real disk accounting.
+- Provider subprocess boundary with a JSON line protocol, so a GPU fault fails
+  one job rather than the engine.
+- **TripoSR provider running real inference**, including a PyMCubes-backed
+  compatibility module that removes the need to compile `torchmcubes`.
+- Mandatory asset validation producing `quality_report.json`; a model that
+  reports success while producing no geometry now fails the job.
+- `volum generate`, end to end: job → inference → validation → GLB plus
+  `asset.json` recording seed, runtime, parameters and hardware.
+- `docs/integration-notes.md` recording findings that were expensive to
+  establish.
+
+### Fixed
+- `.gitignore` directory rules are anchored to the repository root. Unanchored,
+  `jobs/` also matched `engine/src/volum_core/jobs/` and excluded a source
+  package from the repository entirely.
+- PEP 561 `py.typed` markers, without which the installed package was treated as
+  untyped.
+- Import sorting now declares first-party packages rather than relying on
+  filesystem detection, which differed between a working copy and a clean
+  checkout.

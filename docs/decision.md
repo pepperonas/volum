@@ -327,19 +327,29 @@ Each is independent; accept or reject individually.
 
 ---
 
-## 12. Open questions before implementation
+## 12. Open questions
 
-1. **Licences of `mtldiffrast`, `mtlgemm`, `mtlbvh`, `mtlmesh`** — blocking for any
-   commercial claim. Read the repositories directly; if unlicensed, ask the author.
+**Settled since this document was written**
+
+- *GitHub repository* — created, public: https://github.com/pepperonas/volum
+- *Documentation language* — English, confirmed.
+- *Hardware plan* — develop against TripoSR locally, which now works: 63 s and 23,095
+  vertices on the 16 GB M1 Pro over MPS.
+- *Does PyTorch MPS work on macOS 26?* — **Yes**, measured with torch 2.13.0. The
+  reported breakage was 2.9/2.10 only. This was a genuine risk to the whole Apple
+  Silicon plan and is now closed (`docs/integration-notes.md`).
+
+**Still open**
+
+1. **Licences of `mtldiffrast`, `mtlgemm`, `mtlbvh`, `mtlmesh`** — still UNKNOWN, and
+   still blocking for any commercial claim about the TRELLIS.2 provider. The registry
+   declares `CommercialUse.UNKNOWN` accordingly.
 2. **Does TRELLIS.2 complete on 16 GB unified memory, and how slowly?** No published data
-   point exists. Requires freeing ~20 GB of disk.
-3. **GitHub repository** — `pepperonas/volum` does not exist. Public from the first commit,
-   or private until V1? (Spec §41 assumes public; creating it is an outward-facing action I
-   have not taken.)
-4. **Hardware plan** — §7 above, options 1/2/3.
-5. **Documentation language** — these documents are in English on the assumption that a
-   public OSS project wants international contributors (spec §49). The spec itself is
-   German. Say the word and I will switch.
+   point exists. Gating reports it as *marginal* with the swap consequence spelled out.
+   Requires freeing roughly 20 GB of disk to attempt.
+3. **Background removal.** VOLUM does not yet separate the subject; results are much
+   better with a transparent input, and the worker says so rather than pretending. The
+   architecture calls for BiRefNet (MIT) in VOLUM's own preprocessing stage.
 
 ---
 

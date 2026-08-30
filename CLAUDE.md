@@ -5,19 +5,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repository is
 
 **VOLUM** — a local-first, cross-platform image-to-3D desktop application (Tauri 2 +
-React + Python engine). Public open-source project.
+React + Python engine). Public open-source project: https://github.com/pepperonas/volum
 
-**Current state: pre-implementation.** Phase 0 (audit) and Phase 1 (model research) are
-done; no application code exists yet. The full specification is
-`VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines, German) — it is the requirements
-document and takes precedence over this file on questions of scope.
+**Current state: the engine works end to end.** `volum generate image.png` runs real
+inference on this machine and produces a validated GLB — measured 63 s and 23,095
+vertices on an M1 Pro over MPS. Hardware detection, doctor, model manager, job system,
+provider abstraction, TripoSR provider, validation and CLI are in place. The Tauri
+desktop app, the HTTP engine and the 3D viewer are **not** built yet.
+
+The full specification is `VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines,
+German) — it is the requirements document and takes precedence over this file on
+questions of scope.
 
 Read before doing anything: **`docs/decision.md`** (the approved technical plan) and
 **`docs/licenses.md`** (why several obvious choices are unavailable).
 
 ## Commands
 
-No build yet. Once scaffolded, the intended commands are:
+Working today:
 
 ```bash
 # Engine (Python, uv)
@@ -34,12 +39,15 @@ cd apps/desktop && pnpm lint && pnpm tsc --noEmit
 cd apps/desktop && pnpm tauri dev
 cd apps/desktop && pnpm tauri build
 
-# CLI (shares volum-core — never reimplement pipeline logic here)
-uv run volum doctor
-uv run volum models
-uv run volum generate image.jpg
-uv run volum benchmark --model <id> --smoke           # real inference, needs GPU
+# CLI (shares volum_core — never reimplement pipeline logic here)
+uv run volum doctor                                    # what this machine can run
+uv run volum models list | show <id> | disk
+uv run volum models install triposr                    # ~2.5 GB, ~90 s
+uv run volum generate image.png --seed 7               # real inference
 ```
+
+**Set `VOLUM_DATA_DIR` when developing.** It overrides everything else and keeps tests
+and experiments out of the real user data directory.
 
 **Python must be pinned to `>=3.11,<3.13`.** The machine's default `python3` is 3.14.7 and
 the ML stack has no wheels for it. Let `uv` provision the interpreter; never inherit the
@@ -68,6 +76,20 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
   fight and makes `ModelManager.remove()` / `disk_usage()` dishonest.
 - **Provider capabilities and requirements are declared data**, not branches in the
   pipeline. The doctor computes availability from hardware facts.
+
+## Verify against a clean checkout, not your working copy
+
+Twice in one session a check passed locally and failed in CI on identical files,
+both times because the working copy carried artefacts a fresh checkout does not:
+
+- **Ruff infers first-party packages from the filesystem.** A built virtualenv made
+  `volum_core` first-party locally and third-party in CI, changing the required import
+  order. Fixed by declaring `known-first-party`.
+- **PEP 561.** Without `py.typed`, mypy resolved the *installed* package as untyped in
+  CI while the source passed locally.
+
+Before pushing anything structural: `git clone . /tmp/verify && cd /tmp/verify/engine &&
+uv sync --extra dev && uv run ruff check src tests && uv run --with mypy mypy && uv run pytest`.
 
 ## Non-obvious constraints
 
@@ -98,7 +120,17 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
   substitutes attention, GEMM and rasterisation. Same seed + same input + different machine
   ⇒ different mesh. Record seed/version/runtime/input hash; do not promise more.
 - **The data directory must be relocatable.** One provider plus its environment is ~20 GB
-  of the 29 GB free here. Check free space before every install.
+  of the free space here. Check free space before every install.
+- **`.gitignore` directory rules must be anchored.** `jobs/` matched
+  `engine/src/volum_core/jobs/` and silently erased a whole source package from the
+  repository — and ruff honours `.gitignore`, so it went unlinted too. Guarded by
+  `tests/test_repo_hygiene.py`.
+- **Model dependency pins are load-bearing.** TripoSR's `transformers==4.35.0` is not
+  housekeeping: transformers 5.x renamed the ViT internals, so the published checkpoint
+  fails to load entirely. Where a pin cannot be carried, the install manifest records what
+  was actually resolved. See `docs/integration-notes.md` for this and the rest —
+  MPS on macOS 26, the rembg `[cpu]` extra and its `sys.exit()` at import, and the
+  torchmcubes substitution.
 
 ## House rules
 
