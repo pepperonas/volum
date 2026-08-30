@@ -9,6 +9,7 @@ The real download is covered by a marked integration test that CI skips.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -39,6 +40,22 @@ from volum_core.models.manager import (
 @pytest.fixture
 def manager(tmp_path: Path) -> ModelManager:
     return ModelManager(tmp_path / "models")
+
+
+def _site_packages(manager: ModelManager, model_id: str) -> Path:
+    """Where a virtual environment keeps site-packages on this platform.
+
+    Windows uses ``Lib/site-packages``; POSIX uses ``lib/pythonX.Y/site-packages``.
+    Hardcoding the POSIX form made a test build a layout the manager could not
+    recognise on Windows — which is the same class of mistake the production
+    code had in `python_executable`.
+    """
+    venv = manager.venv_dir(model_id)
+    if os.name == "nt":
+        return venv / "Lib" / "site-packages"
+    return (
+        venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    )
 
 
 class FakeRunner:
@@ -193,7 +210,7 @@ def _install_with_fakes(
     """Run an install with every external command replaced."""
     manager._run_command = FakeRunner(
         dirs=(
-            manager.venv_dir(spec.model_id) / "lib" / "python3.11" / "site-packages",
+            _site_packages(manager, spec.model_id),
             manager.source_dir(spec.model_id),
         ),
         files=(manager.python_executable(spec.model_id),),
@@ -293,16 +310,16 @@ def test_shims_are_copied_into_the_provider_environment(
             ),
         ),
     )
-    venv = manager.venv_dir("shimmed")
+    site_packages = _site_packages(manager, "shimmed")
     manager._run_command = FakeRunner(
-        dirs=(venv / "lib" / "python3.11" / "site-packages",),
+        dirs=(site_packages,),
         files=(manager.python_executable("shimmed"),),
     )
     monkeypatch.setattr(manager, "preflight", lambda *a, **k: None)
     monkeypatch.setattr("volum_core.models.manager.get_install_spec", lambda model_id: spec)
 
     manager.install("shimmed")
-    shim = venv / "lib" / "python3.11" / "site-packages" / "torchmcubes.py"
+    shim = site_packages / "torchmcubes.py"
     assert shim.exists()
     assert "PyMCubes" in shim.read_text(encoding="utf-8")
 
@@ -318,8 +335,9 @@ def test_verify_flags_missing_and_empty_weights(manager: ModelManager, tmp_path:
     directory = manager.directory("triposr")
     (directory / "weights").mkdir(parents=True)
     (directory / "source").mkdir(parents=True)
-    (directory / "venv" / "bin").mkdir(parents=True)
-    (directory / "venv" / "bin" / "python").touch()
+    interpreter = manager.python_executable("triposr")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch()
     (directory / "weights" / "config.yaml").write_bytes(b"")  # empty on purpose
     (directory / MANIFEST_FILE).write_text(
         InstallManifest(
@@ -424,3 +442,42 @@ def test_install_records_the_resolved_environment(
     manifest = manager.manifest("fakemodel")
     assert manifest is not None
     assert "torch==2.13.0" in manifest.frozen_requirements
+
+
+# --- the venv layout ------------------------------------------------------
+#
+# Both branches are exercised on every platform. Without this, the Windows
+# layout was only ever checked by the Windows leg of CI — which is how the
+# POSIX path came to be hardcoded twice, once in the manager and once here.
+
+
+def test_interpreter_path_follows_the_platform(
+    manager: ModelManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("volum_core.models.manager.os.name", "nt")
+    assert manager.python_executable("m").parts[-2:] == ("Scripts", "python.exe")
+
+    monkeypatch.setattr("volum_core.models.manager.os.name", "posix")
+    assert manager.python_executable("m").parts[-2:] == ("bin", "python")
+
+
+def test_interpreter_path_does_not_depend_on_what_exists(manager: ModelManager) -> None:
+    """It is needed before the environment is created, which is when an
+    existence check returns the wrong platform's answer."""
+    before = manager.python_executable("m")
+    before.parent.mkdir(parents=True)
+    before.touch()
+    assert manager.python_executable("m") == before
+
+
+def test_site_packages_is_found_in_both_layouts(manager: ModelManager) -> None:
+    """The manager discovers rather than declares this, because the Python
+    minor version is part of the POSIX path and is not known statically."""
+    venv = manager.venv_dir("m")
+
+    (venv / "Lib" / "site-packages").mkdir(parents=True)
+    assert manager._site_packages("m") == venv / "Lib" / "site-packages"
+
+    posix = venv / "lib" / "python3.11" / "site-packages"
+    posix.mkdir(parents=True)
+    assert manager._site_packages("m") == posix
