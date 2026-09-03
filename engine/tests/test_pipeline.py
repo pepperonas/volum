@@ -18,6 +18,7 @@ from volum_core.export import PRINT_FORMATS, ExportFormat, ExportOptions
 from volum_core.jobs import JobManager, JobStatus, JobStore
 from volum_core.models.registry import TRIPOSR
 from volum_core.pipeline import PipelineResult, read_asset_metadata, run_pipeline
+from volum_core.pipeline import run as run_module
 from volum_core.providers.types import (
     EnvironmentReport,
     GenerationRequest,
@@ -294,3 +295,77 @@ def test_the_stage_machine_survives_a_provider_naming_the_same_stage(
         manager, OptimizingProvider(), tmp_path, export=ExportOptions(formats=PRINT_FORMATS)
     )
     assert result.job.status is JobStatus.COMPLETED
+
+
+# --- cancellation arriving from another thread ------------------------------
+
+
+class CancelledMidGenerateProvider(FakeProvider):
+    """What the worker provider does when its subprocess is terminated.
+
+    The HTTP engine cancels a running job by id from another thread: it marks
+    the record cancelled and terminates the worker, whose ``generate`` then
+    raises ``ProviderExecutionError``. Both events reach the pipeline as an
+    error *after* the job is already cancelled.
+    """
+
+    def __init__(self, manager: JobManager) -> None:
+        super().__init__()
+        self._manager = manager
+        self.record_id = ""
+
+    def generate(
+        self, request: GenerationRequest, on_progress: ProgressCallback
+    ) -> GenerationResult:
+        on_progress("reconstructing", None, "Reconstructing")
+        self._manager.cancel(self.record_id)
+        raise ProviderExecutionError("Generation was cancelled.")
+
+
+def test_a_worker_killed_by_cancel_is_a_cancelled_job_not_a_failed_one(
+    manager: JobManager, tmp_path: Path
+) -> None:
+    provider = CancelledMidGenerateProvider(manager)
+    record = manager.create(model_id="triposr", input_files=[tmp_path / "in.png"])
+    provider.record_id = record.id
+
+    result = run_pipeline(
+        manager=manager,
+        provider=provider,
+        record=record,
+        images=[tmp_path / "in.png"],
+        output_dir=tmp_path / "out",
+    )
+
+    assert result.job.status is JobStatus.CANCELLED
+    assert result.job.error is None
+    assert provider.cleaned_up
+
+
+def test_a_cancel_landing_during_validation_still_ends_cancelled(
+    manager: JobManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Between the last stage-boundary check and the final transition the job
+    can still be cancelled from outside. Advancing to COMPLETED is then illegal,
+    and the state machine's refusal must read as 'cancelled', not crash the
+    runner thread."""
+    record = manager.create(model_id="triposr", input_files=[tmp_path / "in.png"])
+    real_validate = run_module.validate_asset
+
+    def validate_then_cancel(path: Path, *, for_printing: bool = False):  # type: ignore[no-untyped-def]
+        report = real_validate(path, for_printing=for_printing)
+        manager.cancel(record.id)
+        return report
+
+    monkeypatch.setattr(run_module, "validate_asset", validate_then_cancel)
+
+    result = run_pipeline(
+        manager=manager,
+        provider=FakeProvider(),
+        record=record,
+        images=[tmp_path / "in.png"],
+        output_dir=tmp_path / "out",
+    )
+
+    assert result.job.status is JobStatus.CANCELLED
+    assert "mesh" not in result.job.artifacts

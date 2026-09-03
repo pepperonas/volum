@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 
 from ..export import ExportedFile, ExportFormat, ExportOptions, export_mesh
 from ..hardware.detect import detect_hardware
-from ..jobs.manager import JobCancelledError, JobManager
-from ..jobs.types import JobError, JobRecord, JobStatus, can_transition
+from ..jobs.manager import CancellationToken, JobCancelledError, JobManager
+from ..jobs.types import InvalidTransitionError, JobError, JobRecord, JobStatus, can_transition
 from ..providers.types import GenerationRequest, GenerationResult, ImageTo3DProvider
 from ..providers.worker_provider import ProviderExecutionError
 from ..validation import QualityReport, validate_asset
@@ -47,6 +47,7 @@ class AssetMetadata(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     volum_version: str = __version__
     source_images: list[str] = Field(default_factory=list)
+    source_image_sha256: list[str] = Field(default_factory=list)
     export_formats: list[str] = Field(default_factory=list)
     target_size_mm: float | None = None
     repair_strategy: str | None = None
@@ -86,15 +87,20 @@ def _record_success(  # noqa: PLR0913 - a stage boundary; all keyword-only
     parameters: dict[str, object],
     seed: int | None,
     result: GenerationResult,
+    token: CancellationToken,
     on_stage: Callable[[str], None] | None,
 ) -> PipelineResult:
     """Export, write the metadata, complete the job."""
     exports = _export_asset(asset_path, output_dir, export_options)
+    # Exporting can take a while; a cancel that landed meanwhile must not be
+    # followed by artifacts appearing on a cancelled record.
+    token.raise_if_cancelled()
 
     hardware = detect_hardware()
     metadata = AssetMetadata(
         id=record.id,
         source_images=[str(path) for path in images],
+        source_image_sha256=list(record.input_hashes),
         export_formats=[fmt.value for fmt in export_options.formats],
         target_size_mm=export_options.target_size_mm,
         repair_strategy=repair_report.strategy.value if repair_report else None,
@@ -245,25 +251,32 @@ def run_pipeline(  # noqa: PLR0913 - all keyword-only; a parameter object would
             parameters=parameters,
             seed=seed,
             result=result,
+            token=token,
             on_stage=on_stage,
         )
 
-    except JobCancelledError:
-        provider.cancel()
-        if record.status.is_active:
-            manager.advance(record, JobStatus.CANCELLED, message="Cancelled by the user.")
-        return PipelineResult(job=record)
-
-    except ProviderExecutionError as error:
-        manager.fail(
-            record,
-            JobError(
-                message=error.message,
-                technical=error.technical,
-                suggestions=error.suggestions,
-            ),
-        )
-        return PipelineResult(job=record)
+    except (JobCancelledError, ProviderExecutionError, InvalidTransitionError) as error:
+        # A cancel can arrive from another thread at any moment, and it shows
+        # up here in three disguises: the boundary check raising, the worker
+        # dying because it was terminated, or the state machine refusing a move
+        # out of CANCELLED. All three mean the same thing once the token is set;
+        # only when it is not are they real failures.
+        if token.is_cancelled:
+            provider.cancel()
+            if record.status.is_active:
+                manager.advance(record, JobStatus.CANCELLED, message="Cancelled by the user.")
+            return PipelineResult(job=record)
+        if isinstance(error, ProviderExecutionError):
+            manager.fail(
+                record,
+                JobError(
+                    message=error.message,
+                    technical=error.technical,
+                    suggestions=error.suggestions,
+                ),
+            )
+            return PipelineResult(job=record)
+        raise
 
     finally:
         provider.cleanup()

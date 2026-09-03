@@ -14,7 +14,14 @@ import numpy as np
 import pytest
 import trimesh
 
-from volum_core.export import PRINT_FORMATS, ExportFormat, ExportOptions, export_mesh
+from volum_core.export import (
+    PRINT_FORMATS,
+    ExportFormat,
+    ExportOptions,
+    UnknownFormatError,
+    export_mesh,
+    resolve_export_options,
+)
 
 
 @pytest.fixture
@@ -149,3 +156,46 @@ def test_several_formats_in_one_pass_share_the_same_geometry(
     assert len(written) == 2
     sizes = [np.asarray(trimesh.load(f.path, force="mesh").extents) for f in written]
     assert sizes[0] == pytest.approx(sizes[1], rel=1e-4)
+
+
+# --- resolving what the user asked for ---------------------------------------
+#
+# Shared by the CLI flags and the HTTP request body, so the two front doors
+# cannot drift on what "--print" or "for_print" means.
+
+
+def test_no_formats_means_glb() -> None:
+    options, warnings = resolve_export_options(None, for_print=False, target_size_mm=None)
+    assert options.formats == (ExportFormat.GLB,)
+    assert warnings == []
+
+
+def test_print_alone_means_stl_and_3mf_laid_on_the_plate() -> None:
+    options, _ = resolve_export_options(None, for_print=True, target_size_mm=60.0)
+    assert options.formats == PRINT_FORMATS
+    assert options.lay_on_build_plate is True
+    assert options.target_size_mm == 60.0
+
+
+def test_print_adds_to_explicit_formats_rather_than_replacing_them() -> None:
+    options, _ = resolve_export_options(["glb"], for_print=True, target_size_mm=60.0)
+    assert options.formats == (ExportFormat.GLB, *PRINT_FORMATS)
+
+
+def test_formats_are_deduplicated_and_case_insensitive() -> None:
+    options, _ = resolve_export_options(["STL", "stl", "3MF"], for_print=True, target_size_mm=1)
+    assert options.formats == (ExportFormat.STL, ExportFormat.THREEMF)
+
+
+def test_a_print_format_without_a_size_warns_out_loud() -> None:
+    """A slicer showing a few millimetres looks like a printer bug; say it first."""
+    _, warnings = resolve_export_options(["stl"], for_print=False, target_size_mm=None)
+    assert len(warnings) == 1
+    assert "size" in warnings[0].lower()
+
+
+def test_an_unknown_format_names_the_known_ones() -> None:
+    with pytest.raises(UnknownFormatError) as excinfo:
+        resolve_export_options(["fbx"], for_print=False, target_size_mm=None)
+    assert "fbx" in str(excinfo.value)
+    assert "stl" in str(excinfo.value)

@@ -3,7 +3,9 @@ from .formats import (
     ExportedFile,
     ExportFormat,
     ExportOptions,
+    UnknownFormatError,
     export_mesh,
+    resolve_export_options,
 )
 
 __all__ = [
@@ -11,5 +13,7 @@ __all__ = [
     "ExportFormat",
     "ExportOptions",
     "ExportedFile",
+    "UnknownFormatError",
     "export_mesh",
+    "resolve_export_options",
 ]

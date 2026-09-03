@@ -278,3 +278,55 @@ def test_interrupted_jobs_are_failed_at_startup(tmp_path: Path) -> None:
     assert reloaded.error is not None
     assert "interrupted" in reloaded.error.message
     assert store.load(done.id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
+
+
+# --- live records: what the HTTP engine relies on ---------------------------
+
+
+def test_cancel_reaches_the_record_the_runner_is_holding(manager: JobManager) -> None:
+    """The pipeline thread holds a record object; the HTTP thread cancels by id.
+
+    If ``cancel`` only touched a freshly loaded copy, the runner's object would
+    still say 'reconstructing' and the next stage boundary would happily advance
+    it — the cancellation would be lost on disk the moment the runner saved.
+    """
+    record = manager.create(model_id="triposr", input_files=[])
+    manager.advance(record, JobStatus.RECONSTRUCTING)
+
+    cancelled = manager.cancel(record.id)
+
+    assert cancelled is record
+    assert record.status is JobStatus.CANCELLED
+
+
+def test_get_returns_the_live_object_while_a_job_is_active(manager: JobManager) -> None:
+    record = manager.create(model_id="triposr", input_files=[])
+    assert manager.get(record.id) is record
+
+    manager.advance(record, JobStatus.FAILED, message="boom")
+    # Finished jobs are read from disk again: nothing holds them any more.
+    reloaded = manager.get(record.id)
+    assert reloaded is not None and reloaded is not record
+    assert reloaded.status is JobStatus.FAILED
+
+
+def test_a_restart_forgets_live_records(tmp_path: Path) -> None:
+    """Live records are an in-process convenience, not a second store."""
+    store = JobStore(tmp_path / "jobs")
+    first = JobManager(store)
+    record = first.create(model_id="triposr", input_files=[])
+    second = JobManager(store)
+    loaded = second.get(record.id)
+    assert loaded is not None and loaded is not record
+
+
+def test_reporting_into_a_finished_job_is_ignored(manager: JobManager) -> None:
+    """A worker that keeps talking after a cancel must not resurrect the job's
+    progress list — the UI would show 'Reconstructing…' under a cancelled badge."""
+    record = manager.create(model_id="triposr", input_files=[])
+    manager.cancel(record.id)
+    before = len(record.progress)
+
+    manager.report(record, "still going")
+
+    assert len(record.progress) == before

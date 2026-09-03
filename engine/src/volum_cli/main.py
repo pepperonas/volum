@@ -14,11 +14,7 @@ import typer
 from rich.console import Console
 
 from volum_core.config import get_data_dir, load_settings
-from volum_core.export import PRINT_FORMATS, ExportFormat, ExportOptions
 from volum_core.hardware import run_doctor
-from volum_core.hardware.detect import detect_hardware
-from volum_core.hardware.types import RuntimeKind
-from volum_core.jobs import JobManager, JobStore
 from volum_core.jobs.types import JobStatus
 from volum_core.models import (
     InstallState,
@@ -27,10 +23,10 @@ from volum_core.models import (
     all_models,
     get_model,
 )
-from volum_core.pipeline import PipelineResult, run_pipeline
+from volum_core.pipeline import PipelineResult
 from volum_core.providers import Verdict
-from volum_core.providers.factory import available_provider_ids, create_provider
 from volum_core.providers.types import CommercialUse, ProviderMetadata
+from volum_core.service import JobRequest, ServiceError, VolumService
 from volum_core.version import __version__
 
 from .render import render_doctor, render_models
@@ -209,20 +205,6 @@ def models_show(
     console.print()
 
 
-def _pick_device() -> str:
-    """Choose the runtime for a generation.
-
-    Uses the same preference order as the doctor, so what the doctor reports and
-    what a job actually runs on cannot drift apart.
-    """
-    recommended = detect_hardware().recommended_runtime
-    return (
-        "mps"
-        if recommended is RuntimeKind.MPS
-        else ("cuda" if recommended is RuntimeKind.CUDA else "cpu")
-    )
-
-
 def _manager() -> ModelManager:
     return ModelManager(get_data_dir() / "models")
 
@@ -328,35 +310,6 @@ def models_disk() -> None:
     console.print(f"  {'total':<16} {_gib(sum(usage.values())):>10}")
 
 
-def _export_options(
-    formats: list[str] | None, *, for_print: bool, size_mm: float | None
-) -> ExportOptions:
-    """Turn the format flags into export options, or exit with a usable message."""
-    try:
-        chosen = (
-            PRINT_FORMATS
-            if for_print and not formats
-            else tuple(ExportFormat(f.lower()) for f in (formats or ["glb"]))
-        )
-    except ValueError as error:
-        known = ", ".join(f.value for f in ExportFormat)
-        err_console.print(f"[red]Unknown format.[/red] Choose from: {known}")
-        raise typer.Exit(1) from error
-
-    if for_print:
-        # --print means printable output; an explicit --format adds to that
-        # rather than replacing it.
-        chosen = tuple(dict.fromkeys((*chosen, *PRINT_FORMATS)))
-
-    printing = any(fmt.is_print_format for fmt in chosen)
-    if printing and size_mm is None:
-        console.print(
-            "[yellow]No --size-mm given, so the export keeps the model's own scale, "
-            "which is arbitrary. Most slicers will show a few millimetres.[/yellow]"
-        )
-    return ExportOptions(formats=chosen, target_size_mm=size_mm, lay_on_build_plate=printing)
-
-
 def _render_result(result: PipelineResult) -> None:
     """Print what was produced."""
     job = result.job
@@ -397,6 +350,30 @@ def _render_result(result: PipelineResult) -> None:
     )
     for issue in report.issues:
         console.print(f"  [yellow]note[/yellow]  {issue.message}")
+
+
+def _generate(service: VolumService, request: JobRequest, output: Path | None) -> PipelineResult:
+    """Prepare the job, say what the user should hear, run it on this thread."""
+    try:
+        submission = service.prepare_job(request)
+    except ServiceError as error:
+        err_console.print(f"[red]{error.message}[/red]")
+        for suggestion in error.suggestions:
+            err_console.print(f"  {suggestion}")
+        raise typer.Exit(1) from error
+
+    for warning in submission.warnings:
+        console.print(f"[yellow]{warning}[/yellow]")
+
+    record = submission.job
+    console.print(f"Job [bold]{record.id[:12]}[/bold] on [cyan]{record.runtime}[/cyan]")
+
+    with console.status("Starting...") as status:
+        return service.run_job(
+            record.id,
+            output_dir=output,
+            on_stage=lambda stage: status.update(f"[cyan]{stage}[/cyan]..."),
+        )
 
 
 @app.command()
@@ -447,62 +424,22 @@ def generate(
     ] = None,
 ) -> None:
     """Generate a 3D asset from one or more images. Runs entirely on this machine."""
-    manager = _manager()
-    if manager.state(model) is not InstallState.INSTALLED:
-        err_console.print(
-            f"[red]{model} is not installed.[/red]\n"
-            f"  Install it with: [bold]volum models install {model}[/bold]"
-        )
-        raise typer.Exit(1)
-
-    if len(images) > 1:
-        # Said out loud rather than quietly ignored: TripoSR is single-image,
-        # and silently using the first would be the simulated multi-image
-        # support the specification forbids.
-        console.print(
-            f"[yellow]{model} uses a single image. The first of {len(images)} will be "
-            "used; the others are ignored.[/yellow]"
-        )
-
-    export_options = _export_options(formats, for_print=for_print, size_mm=size_mm)
-
-    data_dir = get_data_dir()
-    jobs = JobManager(JobStore(data_dir / "jobs"))
-    chosen_device = device or _pick_device()
-
-    record = jobs.create(
+    request = JobRequest(
         model_id=model,
-        input_files=images,
-        parameters={"mc_resolution": resolution},
+        images=list(images),
         seed=seed,
-        runtime=chosen_device,
+        parameters={"mc_resolution": resolution},
+        formats=formats,
+        for_print=for_print,
+        target_size_mm=size_mm,
+        single_part=single_part,
+        device=device,
     )
-    output_dir = output or (data_dir / "jobs" / record.id / "output")
-
-    console.print(f"Job [bold]{record.id[:12]}[/bold] on [cyan]{chosen_device}[/cyan]")
-
-    provider = create_provider(model, manager, device=chosen_device)
-    if provider is None:
-        known = ", ".join(available_provider_ids())
-        err_console.print(
-            f"[red]'{model}' is in the catalogue but has no implementation yet.[/red]\n"
-            f"  Available: {known}"
-        )
-        raise typer.Exit(1)
-
-    with console.status("Starting...") as status:
-        result = run_pipeline(
-            manager=jobs,
-            provider=provider,
-            record=record,
-            images=list(images),
-            output_dir=output_dir,
-            parameters={"mc_resolution": resolution},
-            seed=seed,
-            export=export_options,
-            drop_loose_parts=single_part,
-            on_stage=lambda stage: status.update(f"[cyan]{stage}[/cyan]..."),
-        )
+    service = VolumService()
+    try:
+        result = _generate(service, request, output)
+    finally:
+        service.shutdown()
 
     job = result.job
     if job.status is not JobStatus.COMPLETED:

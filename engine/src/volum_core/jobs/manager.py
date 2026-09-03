@@ -56,11 +56,23 @@ class JobCancelledError(Exception):
 
 
 class JobManager:
+    """Owns job transitions. Safe to call from more than one thread.
+
+    Two threads touch a running job: the one running the pipeline, which holds
+    the record object, and the one serving HTTP, which knows only the id. The
+    manager keeps every **active** record in memory so both talk about the same
+    object — a cancel that only updated a freshly loaded copy would be
+    overwritten the next time the runner saved. Finished records are dropped
+    and read from disk again; the store, not this map, is the source of truth.
+    """
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
         self._listeners: list[JobListener] = []
         self._tokens: dict[str, CancellationToken] = {}
-        self._lock = threading.Lock()
+        self._live: dict[str, JobRecord] = {}
+        # Re-entrant: ``fail`` and ``cancel`` take it and then call ``advance``.
+        self._lock = threading.RLock()
 
     # --- observation ------------------------------------------------------
 
@@ -91,16 +103,26 @@ class JobManager:
         seed: int | None = None,
         model_version: str | None = None,
         runtime: str | None = None,
+        input_hashes: Iterable[str] = (),
+        export_formats: Iterable[str] = ("glb",),
+        target_size_mm: float | None = None,
+        single_part: bool = False,
     ) -> JobRecord:
         record = JobRecord(
             model_id=model_id,
             model_version=model_version,
             runtime=runtime,
             input_files=list(input_files),
+            input_hashes=list(input_hashes),
             parameters=parameters or {},
             seed=seed,
+            export_formats=list(export_formats),
+            target_size_mm=target_size_mm,
+            single_part=single_part,
         )
-        self._store.save(record)
+        with self._lock:
+            self._live[record.id] = record
+            self._store.save(record)
         self._notify(record)
         return record
 
@@ -117,27 +139,37 @@ class JobManager:
         fraction: float | None = None,
     ) -> JobRecord:
         """Move a job to ``status`` and record the progress entry."""
-        if not can_transition(record.status, status):
-            raise InvalidTransitionError(record.status, status)
+        with self._lock:
+            if not can_transition(record.status, status):
+                raise InvalidTransitionError(record.status, status)
 
-        if record.started_at is None and status is not JobStatus.QUEUED:
-            record.started_at = datetime.now(UTC)
-        record.status = status
-        if status.is_terminal:
-            record.finished_at = datetime.now(UTC)
-        record.progress.append(JobProgress(stage=status, fraction=fraction, message=message))
-
-        self._store.save(record)
+            if record.started_at is None and status is not JobStatus.QUEUED:
+                record.started_at = datetime.now(UTC)
+            record.status = status
+            if status.is_terminal:
+                record.finished_at = datetime.now(UTC)
+                # The token stays: a runner that only now reaches ``token()``
+                # must still learn that the job was cancelled.
+                self._live.pop(record.id, None)
+            record.progress.append(JobProgress(stage=status, fraction=fraction, message=message))
+            self._store.save(record)
         self._notify(record)
         return record
 
     def report(self, record: JobRecord, message: str, fraction: float | None = None) -> JobRecord:
         """Record progress **within** the current stage without a transition.
 
-        ``fraction`` stays ``None`` unless the provider reported a real one.
+        ``fraction`` stays ``None`` unless the provider reported a real one. A
+        finished job ignores reports: a worker still talking after a cancel must
+        not put fresh progress under a terminal badge.
         """
-        record.progress.append(JobProgress(stage=record.status, fraction=fraction, message=message))
-        self._store.save(record)
+        with self._lock:
+            if record.status.is_terminal:
+                return record
+            record.progress.append(
+                JobProgress(stage=record.status, fraction=fraction, message=message)
+            )
+            self._store.save(record)
         self._notify(record)
         return record
 
@@ -151,16 +183,20 @@ class JobManager:
         A job that has already finished is returned unchanged: cancelling a
         completed job is a no-op, not an error.
         """
-        record = self._store.load(job_id)
-        if record is None:
-            return None
-        self.token(job_id).cancel()
-        if record.status.is_terminal:
-            return record
-        return self.advance(record, JobStatus.CANCELLED, message="Cancelled by the user.")
+        with self._lock:
+            record = self.get(job_id)
+            if record is None:
+                return None
+            if record.status.is_terminal:
+                return record
+            self.token(job_id).cancel()
+            return self.advance(record, JobStatus.CANCELLED, message="Cancelled by the user.")
 
     def get(self, job_id: str) -> JobRecord | None:
-        return self._store.load(job_id)
+        """The live record while a job is active, the stored one afterwards."""
+        with self._lock:
+            live = self._live.get(job_id)
+        return live if live is not None else self._store.load(job_id)
 
     def list(self, *, limit: int | None = None) -> list[JobRecord]:
         return self._store.list_jobs(limit=limit)

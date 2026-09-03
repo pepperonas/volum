@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import struct
+import zlib
+from pathlib import Path
+
 import pytest
 
 from volum_core.hardware.types import (
@@ -65,3 +69,22 @@ def m1_pro_16gb() -> HardwareInfo:
     """The actual development machine. Its verdicts are pinned deliberately —
     if a change makes TRELLIS.2 look 'runnable' here, that is a regression."""
     return make_hardware(ram_gib=16, disk_free_gib=29)
+
+
+def make_png(path: Path, *, width: int = 2, height: int = 2) -> Path:
+    """A minimal, genuinely valid PNG — no imaging library required."""
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * width for _ in range(height))
+    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw))
+    data += chunk(b"IEND", b"")
+    path.write_bytes(data)
+    return path

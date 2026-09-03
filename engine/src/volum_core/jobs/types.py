@@ -107,8 +107,17 @@ class JobRecord(BaseModel):
     runtime: str | None = None
 
     input_files: list[Path] = Field(default_factory=list)
+    #: SHA-256 of each input, in the same order. Part of what makes a result
+    #: reproducible: the same seed on a different image is a different job.
+    input_hashes: list[str] = Field(default_factory=list)
     parameters: dict[str, object] = Field(default_factory=dict)
     seed: int | None = None
+
+    #: What the user asked for, as resolved at submission — kept on the record
+    #: so a queued job can be run later from the record alone.
+    export_formats: list[str] = Field(default_factory=lambda: ["glb"])
+    target_size_mm: float | None = None
+    single_part: bool = False
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None

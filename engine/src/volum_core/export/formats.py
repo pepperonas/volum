@@ -18,6 +18,7 @@ like a bug in the printer rather than in the export.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
@@ -66,6 +67,48 @@ class ExportOptions(BaseModel):
     #: Move the object so it sits on z=0 and is centred in x/y. What a slicer
     #: expects on the build plate; harmless for other targets.
     lay_on_build_plate: bool = False
+
+
+class UnknownFormatError(ValueError):
+    def __init__(self, name: str) -> None:
+        known = ", ".join(fmt.value for fmt in ExportFormat)
+        super().__init__(f"Unknown export format '{name}'. Choose from: {known}.")
+        self.name = name
+
+
+def resolve_export_options(
+    formats: Sequence[str] | None, *, for_print: bool, target_size_mm: float | None
+) -> tuple[ExportOptions, list[str]]:
+    """Turn what the user asked for into export options, plus warnings to show.
+
+    One function for both front doors, so ``--print`` on the CLI and
+    ``for_print`` over HTTP mean exactly the same thing: printable output is STL
+    and 3MF laid on the build plate, and an explicit format list *adds* to that
+    rather than replacing it. Unknown names raise :class:`UnknownFormatError`.
+    """
+    chosen: list[ExportFormat] = []
+    for name in formats or ():
+        try:
+            chosen.append(ExportFormat(name.lower()))
+        except ValueError:
+            raise UnknownFormatError(name) from None
+    if for_print:
+        chosen.extend(PRINT_FORMATS)
+    if not chosen:
+        chosen.append(ExportFormat.GLB)
+    unique = tuple(dict.fromkeys(chosen))
+
+    printing = any(fmt.is_print_format for fmt in unique)
+    warnings: list[str] = []
+    if printing and target_size_mm is None:
+        warnings.append(
+            "No target size given, so the print formats keep the model's own scale, "
+            "which is arbitrary. Most slicers will show a few millimetres."
+        )
+    return (
+        ExportOptions(formats=unique, target_size_mm=target_size_mm, lay_on_build_plate=printing),
+        warnings,
+    )
 
 
 class ExportedFile(BaseModel):
