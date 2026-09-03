@@ -7,12 +7,14 @@ machine. No cloud, no account, no telemetry, no remote inference.
 
 > **Status: early. The engine works; the desktop app does not exist yet.**
 >
-> Working today, from the command line: hardware detection and `volum doctor`, the model
-> manager, and real single-image generation to a validated GLB. Measured on an M1 Pro
-> (16 GB, macOS 26.6.2) over MPS: **63 s, 23,095 vertices** with TripoSR.
+> Working today: hardware detection and `volum doctor`, the model manager, real
+> single-image generation to a validated GLB, printable output (repaired to a closed
+> solid, exported as STL and 3MF at real millimetres), and the local HTTP engine that the
+> desktop app will talk to. Measured on an M1 Pro (16 GB, macOS 26.6.2) over MPS:
+> **63 s, 23,095 vertices** with TripoSR.
 >
-> Not built yet: the Tauri desktop application, the local HTTP engine and the 3D viewer.
-> See [`docs/decision.md`](docs/decision.md) for the plan.
+> Not built yet: the Tauri desktop application and the 3D viewer. TRELLIS.2 is integrated
+> but has not been run here yet. See [`docs/decision.md`](docs/decision.md) for the plan.
 
 ## What VOLUM is meant to be
 
@@ -54,8 +56,28 @@ uv run volum models install triposr  # ~2.5 GB, downloaded on request only
 uv run volum generate photo.png
 ```
 
+For a 3D printer, ask for printable output instead. VOLUM then repairs the surface to a
+closed solid, refuses the job if it is not printable, and writes STL and 3MF at a real
+size:
+
+```bash
+uv run volum generate photo.png --print --size-mm 60 --single-part
+```
+
 Images with a transparent background work best — VOLUM does not yet separate the subject
 for you, and it says so rather than pretending otherwise.
+
+### The engine
+
+The same pipeline is served over HTTP for the desktop app. It binds `127.0.0.1` on a port
+the OS chooses, announces that port on stdout, and answers nothing without the session
+token it is given:
+
+```bash
+export VOLUM_ENGINE_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
+uv sync --extra dev --extra engine
+uv run volum-engine     # {"event":"listening","host":"127.0.0.1","port":54321,…}
+```
 
 ## Documentation
 

@@ -339,15 +339,24 @@ Each is independent; accept or reject individually.
   reported breakage was 2.9/2.10 only. This was a genuine risk to the whole Apple
   Silicon plan and is now closed (`docs/integration-notes.md`).
 
+- *Licences of `mtldiffrast`, `mtlgemm`, `mtlbvh`, `mtlmesh`* — **all four are MIT**,
+  read from their licence files (2026-08-30, re-verified 2026-09-03). `mtldiffrast` is
+  implemented from Laine et al. (2020) and only API-compatible with `nvdiffrast`, so
+  NVIDIA's non-commercial clause does not reach the Apple Silicon path. This was the
+  single blocking licence question; TRELLIS.2 is now `CommercialUse.CONDITIONAL`
+  (`docs/licenses.md` §3).
+- *Local HTTP engine* — built. Loopback only, ephemeral port, per-session bearer token
+  (`docs/architecture.md` §3).
+
 **Still open**
 
-1. **Licences of `mtldiffrast`, `mtlgemm`, `mtlbvh`, `mtlmesh`** — still UNKNOWN, and
-   still blocking for any commercial claim about the TRELLIS.2 provider. The registry
-   declares `CommercialUse.UNKNOWN` accordingly.
-2. **Does TRELLIS.2 complete on 16 GB unified memory, and how slowly?** No published data
+1. **Does TRELLIS.2 complete on 16 GB unified memory, and how slowly?** No published data
    point exists. Gating reports it as *marginal* with the swap consequence spelled out.
-   Requires freeing roughly 20 GB of disk to attempt.
-3. **Background removal.** VOLUM does not yet separate the subject; results are much
+   The geometry-only install is **7.33 GB** (the earlier ~20 GB figure counted the 1024
+   and texture models, which STL cannot carry and VOLUM does not fetch), so disk is no
+   longer the obstacle. Two things still are: DINOv3 is gated behind a manual approval,
+   and the macOS GPU watchdog kills long Metal kernels under display-server load.
+2. **Background removal.** VOLUM does not yet separate the subject; results are much
    better with a transparent input, and the worker says so rather than pretending. The
    architecture calls for BiRefNet (MIT) in VOLUM's own preprocessing stage.
 

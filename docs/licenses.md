@@ -1,6 +1,7 @@
 # Licence Inventory
 
-Established: **2026-08-30**. Re-verify before every release.
+Established: **2026-08-30**; Metal packages re-verified **2026-09-03**. Re-verify before
+every release.
 
 **This is not legal advice.** It is a record of what the licence texts say, quoted, with
 the date they were read and a link to the source. Where a term is unclear the entry says
@@ -120,10 +121,28 @@ model weights notwithstanding.
 is independently implemented and permissively licensed, the macOS path is *both* the only
 one that runs on a Mac *and* the only one free of this restriction.
 
-**Open action before any commercial claim:** verify the licence of `mtldiffrast`,
-`mtlgemm`, `mtlbvh`, `mtlmesh` (Pedro Naugusto) — currently **UNKNOWN**. Until verified,
-VOLUM makes no commercial-use claim about the TRELLIS.2 provider. See
-`docs/decision.md` §Open questions.
+**Verified 2026-09-03: the replacement is clean.** All four Metal packages are **MIT**,
+read from their own licence files:
+
+| Package | File | Holder |
+|---|---|---|
+| `mtldiffrast` | `LICENSE.txt` | Pedro Augusto, 2025 |
+| `mtlbvh` | `LICENSE.txt` | 2026 |
+| `mtlgemm` | `LICENSE` | Jianfeng Xiang, 2025 — TRELLIS's own author |
+| `mtlmesh` | `LICENSE` | Jianfeng Xiang, 2025 |
+
+⚠️ Two traps in checking this. The file is `LICENSE.txt` in two of the four repositories,
+so looking only for `LICENSE` reports "no licence" for a repository that has one. And
+`mtlgemm`/`mtlmesh` are not by the same author as `mtldiffrast` — assuming one holder for
+"the mtl\* packages" would misattribute two of them.
+
+**`mtldiffrast` is not a derivative of `nvdiffrast`.** It is implemented from Laine et al.
+(2020), the paper, and is only *API-compatible* with NVIDIA's library. API compatibility
+is not derivation, so NVIDIA's non-commercial clause does not reach the Apple Silicon path.
+
+The registry reflects this: TRELLIS.2 is `CommercialUse.CONDITIONAL`, not `UNKNOWN`. The
+three conditions are the CUDA path's exclusion, the DINOv3 attribution, and the BiRefNet
+substitution — not this.
 
 ### `RMBG-2.0` — BriaAI ❌ **NON-COMMERCIAL**
 
@@ -175,7 +194,7 @@ be checked before any CUDA provider is shipped.
 | TripoSR (MIT) | ✅ | no |
 | BiRefNet (MIT) | ✅ | no |
 | DINOv3 | ✅ with attribution | no — but gated download is an architectural requirement |
-| `mtldiffrast` / `mtlgemm` et al. | **UNKNOWN** | **verify before any commercial claim** |
+| `mtldiffrast` / `mtlgemm` / `mtlbvh` / `mtlmesh` (MIT) | ✅ | no — verified 2026-09-03 |
 | SF3D | ⚠️ under USD 1M revenue | conditional — surface to the user |
 | **`nvdiffrast`** | ❌ | **blocks the official CUDA pipeline** |
 | **`RMBG-2.0`** | ❌ | avoidable — use BiRefNet |
