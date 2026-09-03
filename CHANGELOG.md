@@ -38,6 +38,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports success while producing no geometry now fails the job.
 - `volum generate`, end to end: job → inference → validation → GLB plus
   `asset.json` recording seed, runtime, parameters and hardware.
+- **Local HTTP engine (`volum-engine`)**, the Tauri sidecar: loopback only, ephemeral
+  port announced as one JSON line on stdout, a per-session bearer token required on
+  every request, CORS restricted to the desktop webview's origins. Jobs, models,
+  doctor and settings over JSON; job and install progress as server-sent events
+  carrying the full record; artifacts served with `model/gltf-binary`, `model/stl`
+  and `model/3mf` media types. `--exit-with-parent` stops the engine when the shell
+  that started it is gone.
+- Application service (`volum_core.service.VolumService`) shared by the CLI and the
+  engine, so device choice, format resolution, input staging and cancellation are
+  decided in exactly one place.
+- Input images are validated by content (PNG, JPEG, WebP), size-limited, copied into
+  the job under UUID names and hashed; `asset.json` records the SHA-256 of each input.
+
+### Fixed
+- Cancelling a running job from another thread now ends as `cancelled`, not `failed`:
+  the worker dying after the token was set, and the state machine refusing a move out
+  of `cancelled`, were both being reported as failures.
+- A worker that ignores SIGTERM is killed after a 5 s grace period; before, "cancelled"
+  could be shown while the process kept the GPU for as long as it liked.
+- Job progress streamed over SSE could collapse two stages into one frame when the
+  pipeline moved faster than the event loop serialised; frames are now snapshotted
+  when the notification fires.
+- The test suite is fenced off from the real user directories (`VOLUM_CONFIG_DIR`,
+  `VOLUM_DATA_DIR`); one test had written a fake token into the developer's real
+  `settings.json`.
 - `docs/integration-notes.md` recording findings that were expensive to
   establish.
 

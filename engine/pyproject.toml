@@ -31,7 +31,6 @@ dependencies = [
 engine = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
-    "sse-starlette>=2.1",
 ]
 imaging = [
     "pillow>=10.3",
@@ -57,10 +56,13 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
+    # Starlette's test client; the engine tests skip when it is absent.
+    "httpx2>=2.0",
 ]
 
 [project.scripts]
 volum = "volum_cli.main:app"
+volum-engine = "volum_engine.main:main"
 
 [build-system]
 requires = ["hatchling"]

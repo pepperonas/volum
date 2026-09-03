@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import zlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,24 @@ from volum_core.hardware.types import (
 )
 
 GIB = 1024**3
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_user_directories(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Every test runs against throwaway config and data directories.
+
+    A service constructed without an explicit ``settings_path`` saves to the
+    platform config directory — and one test did exactly that, leaving a fake
+    Hugging Face token in the developer's real ``settings.json``. The
+    environment overrides win over everything else, so setting them here makes
+    the real directories unreachable for the whole suite.
+    """
+    root = tmp_path_factory.mktemp("volum-home")
+    monkeypatch.setenv("VOLUM_CONFIG_DIR", str(root / "config"))
+    monkeypatch.setenv("VOLUM_DATA_DIR", str(root / "data"))
+    yield
 
 
 def make_hardware(

@@ -57,16 +57,31 @@ class WorkerProcess:
         self._cancelled = False
 
     def cancel(self) -> None:
-        """Terminate the worker.
+        """Terminate the worker, and kill it if it does not go.
 
         Safe to call before the process starts and after it has finished; the
         flag is what makes an early cancel take effect rather than being lost.
+
+        SIGTERM first, so a healthy worker can exit cleanly. But the reason a
+        worker gets cancelled is often that it is stuck — inside a GPU kernel,
+        or in a library that swallowed the signal — and such a worker keeps the
+        GPU memory while the job already reads CANCELLED. After the grace period
+        it is killed outright; that is what makes the state true.
         """
         with self._lock:
             self._cancelled = True
             process = self._process
-        if process is not None and process.poll() is None:
-            process.terminate()
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+
+        def escalate() -> None:
+            try:
+                process.wait(timeout=_TERMINATE_GRACE_S)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+        threading.Thread(target=escalate, name="volum-worker-kill", daemon=True).start()
 
     def run(self, on_progress: ProgressCallback) -> ResultEvent:
         with self._lock:

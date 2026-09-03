@@ -335,6 +335,23 @@ def test_shutdown_cancels_running_work(tmp_path: Path, image: Path) -> None:
     assert svc.get_job(job.id).status is JobStatus.CANCELLED  # type: ignore[union-attr]
 
 
+def test_deleting_removes_a_finished_job_and_refuses_an_active_one(
+    service: VolumService, image: Path, provider: SlowFakeProvider
+) -> None:
+    job = service.submit_job(JobRequest(model_id="triposr", images=[image])).job
+    assert provider.started.wait(timeout=10)
+    with pytest.raises(ServiceError) as excinfo:
+        service.delete_job(job.id)
+    assert excinfo.value.kind == "conflict"
+
+    provider.release.set()
+    _wait_for(lambda: service.get_job(job.id), JobStatus.COMPLETED)
+    assert service.delete_job(job.id) is True
+    assert not (service.jobs_dir / job.id).exists()
+    assert service.get_job(job.id) is None
+    assert service.delete_job(job.id) is False
+
+
 # --- artifacts -------------------------------------------------------------------
 
 

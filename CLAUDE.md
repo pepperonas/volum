@@ -7,11 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **VOLUM** — a local-first, cross-platform image-to-3D desktop application (Tauri 2 +
 React + Python engine). Public open-source project: https://github.com/pepperonas/volum
 
-**Current state: the engine works end to end.** `volum generate image.png` runs real
-inference on this machine and produces a validated GLB — measured 63 s and 23,095
-vertices on an M1 Pro over MPS. Hardware detection, doctor, model manager, job system,
-provider abstraction, TripoSR provider, validation and CLI are in place. The Tauri
-desktop app, the HTTP engine and the 3D viewer are **not** built yet.
+**Current state: core, CLI and HTTP engine work end to end.** `volum generate image.png`
+runs real inference on this machine and produces a validated GLB — measured 63 s and
+23,095 vertices on an M1 Pro over MPS. `volum-engine` serves the same pipeline over
+HTTP + SSE on loopback; a real print job (TripoSR → repair → STL + 3MF at 50 mm) has been
+run through it, streamed, downloaded and cancelled live. Hardware detection, doctor,
+model manager, job system, provider abstraction, TripoSR and TRELLIS.2 providers,
+validation, printable export and the shared application service are in place. The
+Tauri desktop app and the 3D viewer are **not** built yet; TRELLIS.2 is integrated but
+has not been installed or run here (needs DINOv3 access and an idle machine).
 
 The full specification is `VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines,
 German) — it is the requirements document and takes precedence over this file on
@@ -45,7 +49,19 @@ uv run volum doctor                                    # what this machine can r
 uv run volum models list | show <id> | disk
 uv run volum models install triposr                    # ~2.5 GB, ~90 s
 uv run volum generate image.png --seed 7               # real inference
+uv run volum generate image.png --print --size-mm 60   # STL + 3MF, repaired, validated
+
+# HTTP engine (the Tauri sidecar) — needs a token, binds 127.0.0.1:<ephemeral>
+export VOLUM_ENGINE_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
+uv run volum-engine                                    # stdout: {"event":"listening","port":…}
 ```
+
+Engine tests need `uv sync --extra dev --extra engine` (FastAPI, uvicorn, and `httpx2` —
+Starlette 1.6 deprecated `httpx` for its test client). They `importorskip` without it.
+
+**TripoSR on this machine is installed under `/Users/martin/volum-data`**, not the
+platform default — run the CLI or the engine with `VOLUM_DATA_DIR=/Users/martin/volum-data`
+to reach it. The example images live in `…/models/triposr/source/examples/`.
 
 **Set `VOLUM_DATA_DIR` when developing.** It overrides everything else and keeps tests
 and experiments out of the real user data directory.
@@ -77,6 +93,16 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
   fight and makes `ModelManager.remove()` / `disk_usage()` dishonest.
 - **Provider capabilities and requirements are declared data**, not branches in the
   pipeline. The doctor computes availability from hardware facts.
+- **Orchestration lives in `volum_core.service.VolumService`.** Device choice, format
+  resolution, input staging, scheduling and cancellation are decided there once; the CLI's
+  `generate` and every engine route are a few lines over it. Only the engine passes
+  `recover_interrupted=True` — a CLI command beside a live engine must not fail the
+  engine's running jobs.
+- **Two threads touch a running job.** `JobManager` keeps active records live so a cancel
+  by id reaches the object the pipeline thread holds; SSE frames are snapshotted on the
+  producer's thread (`model_copy(deep=True)`) or two stages collapse into one frame —
+  seen live as `seq 7 → 9`. Cancel is SIGTERM then SIGKILL after 5 s; a worker wedged in a
+  Metal kernel ignores the first.
 
 ## Verify against a clean checkout, not your working copy
 
@@ -90,7 +116,13 @@ both times because the working copy carried artefacts a fresh checkout does not:
   CI while the source passed locally.
 
 Before pushing anything structural: `git clone . /tmp/verify && cd /tmp/verify/engine &&
-uv sync --extra dev && uv run ruff check src tests && uv run --with mypy mypy && uv run pytest`.
+uv sync --extra dev --extra engine && uv run ruff check src tests && uv run --with mypy mypy
+&& uv run pytest`.
+
+**The suite is fenced off from the real user directories** by an autouse fixture in
+`tests/conftest.py` that sets `VOLUM_CONFIG_DIR` and `VOLUM_DATA_DIR`. It exists because
+a service test once saved a fake Hugging Face token into the developer's real
+`settings.json`. `test_repo_hygiene.py` pins the fixture; keep it.
 
 ## Non-obvious constraints
 

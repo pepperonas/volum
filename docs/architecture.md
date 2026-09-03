@@ -73,22 +73,73 @@ is absent. There is no unauthenticated local endpoint and no fixed port to squat
 
 ## 3. Engine API
 
+Implemented in `engine/src/volum_engine/`; started as `volum-engine`.
+
+### Start-up contract
+
+1. The shell generates a session token (64 hex characters) and passes it in
+   `VOLUM_ENGINE_TOKEN`. The engine refuses to start without one, or with one shorter than
+   32 characters. There is no unauthenticated mode.
+2. The engine binds `127.0.0.1` on port 0 and prints **one JSON line to stdout**:
+   `{"event": "listening", "host": "127.0.0.1", "port": 54321, "pid": 4242, "version": "…"}`.
+   Everything else goes to stderr, so stdout stays parseable. Fields are only ever added.
+3. The shell polls `GET /health` with the token until it answers 200.
+4. With `--exit-with-parent` the engine stops when its stdin closes — a shell that crashes
+   cannot leave an engine behind holding the GPU. Otherwise SIGTERM.
+
+Every request carries `Authorization: Bearer <token>`, `/health` included, compared in
+constant time; anything else is `401` with `WWW-Authenticate: Bearer`. CORS is allowed
+only for the desktop webview's origins (`tauri://localhost`, `http(s)://tauri.localhost`,
+the Vite dev server on 1420; override with `VOLUM_ENGINE_ALLOWED_ORIGINS`). A browser
+tab that guesses the port gets a CORS refusal and, if it gets past that, a 401. The
+interactive OpenAPI pages are disabled: they would be the only unauthenticated thing served.
+
+### Endpoints
+
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | liveness; used by the shell during startup |
-| `GET` | `/api/system/doctor` | full hardware + runtime + model report |
-| `GET` | `/api/models` | registry with per-model availability on *this* machine |
-| `POST` | `/api/models/{id}/install` | explicit, user-triggered download |
-| `DELETE` | `/api/models/{id}` | remove weights and the provider environment |
-| `POST` | `/api/jobs` | create a job from inputs + parameters |
+| `GET` | `/health` | liveness + version; used by the shell during start-up |
+| `GET` | `/api/system/doctor?deep=` | full hardware + runtime + per-model verdict |
+| `GET` / `PATCH` | `/api/settings` | data directory, Hugging Face token (returned only as `…_set: true`), marginal-model opt-in |
+| `GET` | `/api/models` | catalogue with install state, disk usage, verdict for *this* machine, implementation flag |
+| `GET` | `/api/models/{id}` | one entry, including the current install task if any |
+| `POST` | `/api/models/{id}/install` | `202` — explicit, user-triggered download, runs in the background |
+| `GET` | `/api/models/{id}/install/events` | **SSE** install progress (`step`, `message`, terminal `done`/`failed`) |
+| `DELETE` | `/api/models/{id}` | remove weights and the provider environment; `409` while installing or in use |
+| `GET` | `/api/jobs?limit=` | job records, newest first |
+| `POST` | `/api/jobs` | `202` — validate inputs, stage them, queue the job; body mirrors the CLI flags (`model_id`, `images`, `seed`, `formats`, `for_print`, `target_size_mm`, `single_part`, `device`); returns the record plus warnings |
 | `GET` | `/api/jobs/{id}` | job record |
-| `GET` | `/api/jobs/{id}/events` | **SSE** stage/progress stream |
-| `POST` | `/api/jobs/{id}/cancel` | cooperative cancel, then terminate the worker |
-| `GET` | `/api/jobs/{id}/artifacts/{name}` | GLB, quality report, asset metadata |
-| `GET/POST` | `/api/projects…` | project CRUD |
+| `GET` | `/api/jobs/{id}/events` | **SSE** — full record per event, closes after the terminal state |
+| `POST` | `/api/jobs/{id}/cancel` | marks the job cancelled and terminates its worker (SIGTERM, then SIGKILL after 5 s) |
+| `DELETE` | `/api/jobs/{id}` | delete a finished job and its directory; `409` while active |
+| `GET` | `/api/jobs/{id}/artifacts/{name}` | `mesh`, `export_stl`, `export_3mf`, `quality_report`, `repair_report`, `asset` — served only from inside the job directory, with `model/gltf-binary`, `model/stl`, `model/3mf` media types |
 
-Every response is JSON except artifact downloads and the SSE stream. Errors carry both a
-user-facing message and the technical detail, separated (spec §55).
+Projects (spec §28) are not yet exposed; a job directory already holds everything a
+project needs (`job.json`, staged inputs with hashes, artifacts, quality report, `asset.json`).
+
+### Conventions
+
+Every response is JSON except artifact downloads and the SSE streams. Errors — service
+errors, validation errors and unexpected ones alike — have one shape (spec §55):
+
+```json
+{"error": {"message": "triposr is not installed.", "technical": null,
+           "suggestions": ["Install it first: volum models install triposr"]}}
+```
+
+`400` invalid input · `404` unknown · `409` conflict (not installed, already running,
+still active) · `422` malformed body · `503` no implementation · `500` unexpected (traceback
+in the engine log, only the exception's name in the response).
+
+SSE frames are `data: <json>\n\n` carrying the **whole record**, snapshotted on the
+producer's thread at notification time — a late joiner or a dropped frame never loses
+state, and a fast pipeline cannot collapse two stages into one frame. A `: keep-alive`
+comment is sent after 15 s of silence. The browser `EventSource` API cannot set headers, so
+the frontend reads streams with `fetch` and a `ReadableStream` rather than `EventSource`.
+
+Jobs run **one at a time** on a worker thread (one GPU, one job); further submissions wait
+as `queued`, visibly. The engine, not the CLI, fails jobs left non-terminal by a crash at
+start-up — a CLI command beside a live engine must not declare the engine's jobs dead.
 
 ## 4. Provider interface
 

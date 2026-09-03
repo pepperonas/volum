@@ -12,9 +12,12 @@ The guards below are on the cause, not the symptom.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+from volum_core.config import default_config_dir, settings_file
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "engine" / "src"
@@ -91,3 +94,12 @@ def test_every_distributed_package_declares_its_types() -> None:
     a strict type check against the install fails while the source passes."""
     for package in ("volum_core", "volum_cli", "volum_engine"):
         assert (SRC / package / "py.typed").exists(), f"{package} has no py.typed marker"
+
+
+def test_the_suite_is_fenced_off_from_the_real_user_directories() -> None:
+    """Pins the autouse fixture in conftest. Without it a service that saves
+    settings writes to the developer's real config directory."""
+    assert os.environ.get("VOLUM_CONFIG_DIR"), "conftest must set VOLUM_CONFIG_DIR"
+    assert os.environ.get("VOLUM_DATA_DIR"), "conftest must set VOLUM_DATA_DIR"
+    assert "Application Support" not in str(default_config_dir())
+    assert not str(settings_file()).startswith(str(Path.home() / ".config"))

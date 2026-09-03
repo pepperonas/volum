@@ -514,6 +514,23 @@ class VolumService:
     def list_jobs(self, *, limit: int | None = None) -> list[JobRecord]:
         return self.jobs.list(limit=limit)
 
+    def delete_job(self, job_id: str) -> bool:
+        """Remove a finished job and everything in its directory.
+
+        A job that is still queued or running is refused, not silently killed:
+        deleting is for history, cancelling is for work.
+        """
+        record = self.get_job(job_id)
+        if record is None:
+            return False
+        if record.status.is_active:
+            raise ServiceError(
+                "conflict",
+                "The job is still running.",
+                suggestions=["Cancel it first, then delete it."],
+            )
+        return self.jobs._store.delete(job_id)
+
     def subscribe_jobs(self, listener: Callable[[JobRecord], None]) -> Callable[[], None]:
         return self.jobs.subscribe(listener)
 
