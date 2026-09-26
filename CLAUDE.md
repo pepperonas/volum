@@ -14,10 +14,9 @@ CLI, HTTP engine, hardware detection, doctor, model manager, job system, provide
 abstraction, TripoSR and TRELLIS.2 providers, validation, printable export, the shared
 application service and the Tauri app are all in place.
 
-**The macOS application is packaged and verified**: a 239 MB `.app` / 82 MB `.dmg` that
-starts its engine from a bundled relocatable CPython with no development checkout in
-sight. Windows and Linux bundles are wired into a release workflow and have never been
-built.
+**The macOS application is packaged, installed and running**: `/Applications/VOLUM.app`,
+274 MB, starting its engine from a bundled relocatable CPython with no development
+checkout in sight. Windows and Linux bundles build in CI and have never been started.
 
 Not done: signing (no certificates), updates, multi-image, and TRELLIS.2 — integrated and
 licence-checked but never installed or run here (needs DINOv3 access and an idle
@@ -60,6 +59,7 @@ uv run volum generate image.png --print --size-mm 60   # STL + 3MF, repaired, va
 # Packaging (docs/packaging.md)
 python3 scripts/build_runtime.py                       # the bundled engine runtime, ~220 MB
 cd apps/desktop && CI=true pnpm tauri build            # ⚠️ CI=true or the DMG step hangs on Finder
+bash scripts/install-macos.sh --data-dir /Users/martin/volum-data   # build + install to /Applications
 
 # HTTP engine (the Tauri sidecar) — needs a token, binds 127.0.0.1:<ephemeral>
 export VOLUM_ENGINE_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
@@ -204,6 +204,17 @@ a service test once saved a fake Hugging Face token into the developer's real
 - **On macOS the DMG needs `CI=true`.** `create-dmg` opens a Finder window it never
   closes, and Finder then dissents the unmount — `diskutil eject` names the process.
   `CI=true` makes Tauri pass `--skip-jenkins`.
+- **A signed bundle must not be written to, including by itself.** The bundled interpreter
+  wrote `.pyc` into `Contents/Resources` on first run and broke its own signature — 1,280
+  complaints from `codesign --verify`. Fixed by precompiling with hash-based invalidation
+  (mtime-based `.pyc` look stale after any copy and get rewritten), setting
+  `PYTHONDONTWRITEBYTECODE` for the bundled engine, and *not* letting provider workers
+  inherit it — their venvs are in the data directory and would recompile torch every job.
+- **`bundle.macOS.signingIdentity: "-"` is load-bearing.** Without it Tauri leaves the
+  bundle `adhoc,linker-signed`: no `_CodeSignature` directory, nothing in `Resources`
+  sealed. Verify the **installed** copy, not just the built one — that is where the
+  bytecode defect lived.
+- **Copy an app bundle with `ditto`, not `cp -R`.**
 - **Model dependency pins are load-bearing.** TripoSR's `transformers==4.35.0` is not
   housekeeping: transformers 5.x renamed the ViT internals, so the published checkpoint
   fails to load entirely. Where a pin cannot be carried, the install manifest records what

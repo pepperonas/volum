@@ -11,6 +11,7 @@ interrupted from Python; terminating the process can.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -25,6 +26,20 @@ from .worker_protocol import ErrorEvent, ProgressEvent, ResultEvent, WorkerReque
 
 #: Time to wait for a terminated worker to exit before killing it.
 _TERMINATE_GRACE_S = 5.0
+
+#: Not inherited by a worker.
+#:
+#: A packaged engine runs with ``PYTHONDONTWRITEBYTECODE`` set, because its own
+#: application bundle is code-signed and sealed and bytecode written into it
+#: breaks the signature. A provider's environment is a different thing: it
+#: lives in the data directory, nothing seals it, and without its cache every
+#: job recompiles the whole of torch.
+_NOT_INHERITED = ("PYTHONDONTWRITEBYTECODE",)
+
+
+def _worker_environment() -> dict[str, str]:
+    """This process's environment, minus what a worker must not inherit."""
+    return {key: value for key, value in os.environ.items() if key not in _NOT_INHERITED}
 
 
 class ProviderExecutionError(RuntimeError):
@@ -94,6 +109,7 @@ class WorkerProcess:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=_worker_environment(),
             )
             process = self._process
 

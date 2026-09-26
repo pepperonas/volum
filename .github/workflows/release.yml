@@ -84,10 +84,28 @@ jobs:
 
       - name: Bundle
         working-directory: apps/desktop
+        shell: bash
         # CI is already true here, which is what makes Tauri pass
         # --skip-jenkins to create-dmg on macOS. Without it the DMG step hangs
         # on a Finder window it opens and never closes.
-        run: pnpm tauri build
+        #
+        # Retried because macOS runners intermittently fail hdiutil with a
+        # SPURIOUS "No space left on device" — a known diskimages-helper flake
+        # rather than actual disk pressure, seen repeatedly in this workspace's
+        # other projects. The Rust build is cached, so a retry only repeats the
+        # bundling. Each attempt is logged; three failures are a real failure.
+        run: |
+          attempt=1
+          until pnpm tauri build; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::bundling failed $attempt times"
+              exit 1
+            fi
+            echo "::warning::bundling attempt $attempt failed; retrying"
+            attempt=$((attempt + 1))
+            df -h /
+            sleep 10
+          done
 
       - name: What was built
         shell: bash

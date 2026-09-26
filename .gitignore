@@ -74,4 +74,10 @@ Thumbs.db
 
 # The bundled engine runtime: a few hundred megabytes of third-party binaries,
 # rebuilt from pinned inputs by scripts/build_runtime.py.
-/apps/desktop/src-tauri/runtime/
+#
+# ⚠️ The directory itself is NOT ignored, and its README is committed. Tauri lists
+# runtime/**/* as a bundle resource and its build script fails outright when a
+# resource glob matches nothing — so without a file here a fresh checkout cannot
+# compile the shell at all, `pnpm tauri dev` included.
+/apps/desktop/src-tauri/runtime/*
+!/apps/desktop/src-tauri/runtime/README.md

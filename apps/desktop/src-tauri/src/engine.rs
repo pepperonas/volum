@@ -20,6 +20,14 @@ pub const TOKEN_ENV: &str = "VOLUM_ENGINE_TOKEN";
 /// Developer escape hatch: a JSON array naming the command to run instead.
 pub const COMMAND_ENV: &str = "VOLUM_ENGINE_COMMAND";
 
+/// Keeps the bundled interpreter from writing bytecode into its own bundle.
+///
+/// An application bundle is code-signed and sealed. The first run of an
+/// unprotected build wrote 1,280 `.pyc` files into `Contents/Resources` and
+/// macOS reported the application as damaged from then on. The bundle ships
+/// with its bytecode already compiled, so nothing is lost by forbidding it.
+pub const NO_BYTECODE_ENV: &str = "PYTHONDONTWRITEBYTECODE";
+
 /// Where the engine finds the `uv` it builds provider environments with.
 /// Without this a bundled application would look on `PATH`, which it has no
 /// business relying on.
@@ -197,10 +205,13 @@ pub fn resolve_command(
                     EXIT_WITH_PARENT.into(),
                 ],
                 cwd: None,
-                env: vec![(
-                    UV_ENV.to_string(),
-                    runtime.join(runtime_uv()).display().to_string(),
-                )],
+                env: vec![
+                    (
+                        UV_ENV.to_string(),
+                        runtime.join(runtime_uv()).display().to_string(),
+                    ),
+                    (NO_BYTECODE_ENV.to_string(), "1".to_string()),
+                ],
             });
         }
     }
@@ -665,6 +676,31 @@ mod tests {
             "uv must come from the bundle, got {}",
             uv.1
         );
+    }
+
+    #[test]
+    fn the_bundled_runtime_may_not_write_into_its_own_bundle() {
+        // An application bundle is sealed. Bytecode written into it breaks the
+        // signature, and macOS then calls the application damaged — measured:
+        // the first run of an unprotected build produced 1,280 complaints from
+        // `codesign --verify`. The bundle ships precompiled, so this costs
+        // nothing.
+        let cmd = resolve_command(None, Some(Path::new("/bundle/runtime")), None, &|_| true)
+            .expect("should resolve");
+        assert!(
+            cmd.env
+                .iter()
+                .any(|(key, value)| key == NO_BYTECODE_ENV && value == "1"),
+            "the bundled runtime must not write bytecode"
+        );
+    }
+
+    #[test]
+    fn the_development_engine_may_write_bytecode() {
+        // Nothing is sealed in a checkout, and the cache is worth having.
+        let engine_dir = Path::new("/repo/engine");
+        let cmd = resolve_command(None, None, Some(engine_dir), &|_| true).expect("should resolve");
+        assert!(!cmd.env.iter().any(|(key, _)| key == NO_BYTECODE_ENV));
     }
 
     #[test]

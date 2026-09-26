@@ -102,7 +102,14 @@ def site_packages(tree: Path) -> Path:
     return tree / "lib" / f"python{PYTHON_VERSION}" / "site-packages"
 
 
+#: Committed, and put back after every build. Tauri's build script fails when a
+#: resource glob matches nothing, so this file is what lets a fresh checkout
+#: compile the shell before the runtime exists.
+PLACEHOLDER = RUNTIME / "README.md"
+
+
 def copy_interpreter(source: Path) -> None:
+    kept = PLACEHOLDER.read_text(encoding="utf-8") if PLACEHOLDER.exists() else None
     if RUNTIME.exists():
         shutil.rmtree(RUNTIME)
     RUNTIME.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +123,9 @@ def copy_interpreter(source: Path) -> None:
     # is to have the engine installed into it.
     for marker in RUNTIME.rglob("EXTERNALLY-MANAGED"):
         marker.unlink()
+
+    if kept is not None:
+        PLACEHOLDER.write_text(kept, encoding="utf-8")
 
 
 def install_engine(uv: Path) -> None:
@@ -147,6 +157,40 @@ def bundle_uv(uv: Path) -> None:
     destination = target / uv.name
     shutil.copy2(uv, destination)
     destination.chmod(0o755)
+
+
+def precompile(tree: Path) -> None:
+    """Compile the bundle's bytecode with hash-based invalidation.
+
+    Two things go wrong without this, and they compound.
+
+    A signed bundle is sealed: every file's hash is recorded. The moment the
+    interpreter writes a `.pyc` into its own tree the seal is broken, and macOS
+    reports the application as damaged — measured, not feared: the first run of
+    an installed build produced 1,280 complaints from `codesign --verify`.
+
+    Ordinary `.pyc` files are validated against the source file's *modification
+    time*, and copying a bundle rarely preserves it. So every precompiled file
+    looks stale on arrival and Python rewrites all of them. Hash-based
+    invalidation (PEP 552) validates against the source's *contents* instead,
+    which survives any copy. `unchecked-hash` goes further and does not even
+    re-read the source — the bundle is immutable, so there is nothing to check.
+
+    Together with PYTHONDONTWRITEBYTECODE on the engine, this gives a bundle
+    that starts fast and stays sealed.
+    """
+    python = interpreter_path(tree)
+    run(
+        [
+            str(python),
+            "-m",
+            "compileall",
+            "--invalidation-mode",
+            "unchecked-hash",
+            "-q",
+            str(tree / ("Lib" if os.name == "nt" else "lib")),
+        ]
+    )
 
 
 def strip(tree: Path) -> int:
@@ -203,6 +247,11 @@ def verify(tree: Path) -> dict[str, str]:
     if not python.exists():
         raise BuildError(f"no interpreter at {python}")
 
+    # Nothing this function runs may leave a mark: the tree is about to be
+    # signed, and a `.pyc` written here would be sealed with a timestamp that
+    # the next copy invalidates.
+    quiet = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
     imports = run(
         [
             str(python),
@@ -213,7 +262,8 @@ def verify(tree: Path) -> dict[str, str]:
             "from volum_engine.app import create_app;"
             "r = run_doctor(deep=False);"
             'print(json.dumps({"version": r.volum_version, "runtime": r.recommended_runtime}))',
-        ]
+        ],
+        env=quiet,
     )
     report = json.loads(imports.stdout.strip().splitlines()[-1])
 
@@ -223,7 +273,7 @@ def verify(tree: Path) -> dict[str, str]:
         [str(python), "-m", "volum_engine.main"],
         capture_output=True,
         text=True,
-        env={k: v for k, v in os.environ.items() if k != "VOLUM_ENGINE_TOKEN"},
+        env={k: v for k, v in quiet.items() if k != "VOLUM_ENGINE_TOKEN"},
     )
     if refusal.returncode != 2 or "VOLUM_ENGINE_TOKEN" not in refusal.stderr:
         raise BuildError(
@@ -271,7 +321,17 @@ def build(*, do_strip: bool) -> None:
         freed = strip(RUNTIME)
         print(f"stripped    {freed / 1e6:.0f} MB")
 
+    precompile(RUNTIME)
+    print(f"compiled    hash-based bytecode ({directory_size(RUNTIME) / 1e6:.0f} MB)")
+
+    before = sum(1 for _ in RUNTIME.rglob("*"))
     checked = verify(RUNTIME)
+    after = sum(1 for _ in RUNTIME.rglob("*"))
+    if after != before:
+        raise BuildError(
+            f"verification changed the tree ({before} -> {after} files); "
+            "something is still writing into what is about to be sealed"
+        )
     size = directory_size(RUNTIME)
     MANIFEST.write_text(
         json.dumps(

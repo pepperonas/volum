@@ -81,9 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime and verifies what it built. Windows and Linux bundles are wired into a release
   workflow (`.github/workflows/release.yml`) and have not been built yet; `docs/packaging.md`
   says which of the three are measurements and which are arrangements.
-- Nothing is signed. macOS will refuse to open the application until its quarantine
-  attribute is removed, and Windows SmartScreen will warn. Signing needs certificates this
-  project does not have; where they plug in is documented.
+- The macOS bundle is ad-hoc signed and properly sealed, and
+  `scripts/install-macos.sh` builds, signs, installs it into `/Applications` and checks
+  the *installed* copy is still sealed. It is not notarised — that is what Gatekeeper
+  rejects it for — and Windows SmartScreen warns for the same reason. Signing needs
+  certificates this project does not have; where they plug in is documented.
+- All three platforms build: macOS 4 min, Linux 6 min, Windows 9 min. Only macOS has been
+  started; `docs/packaging.md` keeps that distinction.
 
 ### Changed
 - TRELLIS.2's commercial-use status moved from `UNKNOWN` to `CONDITIONAL`: the four
@@ -94,6 +98,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the "Built with DINOv3" attribution and the BiRefNet substitution.
 
 ### Fixed
+- **The packaged application broke its own code signature on first run.** The bundled
+  interpreter wrote bytecode into its sealed `Contents/Resources` — 1,280 complaints from
+  `codesign --verify`, 60 files added and 1,219 rewritten, every one a `.pyc`. Two causes
+  compounded: a sealed bundle cannot be written to at all, and mtime-validated `.pyc` look
+  stale after any copy so Python rewrote all of them. The runtime is now precompiled with
+  hash-based invalidation, the bundled engine runs with `PYTHONDONTWRITEBYTECODE`, and
+  provider workers explicitly do not inherit that — their environments are in the data
+  directory and would otherwise recompile the whole of torch on every job.
+- **Tauri left the macOS bundle `adhoc,linker-signed`** — a linker-only signature with no
+  `_CodeSignature` directory, so nothing in `Contents/Resources` was sealed, which matters
+  here because that is where 143 shared libraries and two Mach-O executables live.
 - **The engine could never be built as a wheel.** A `force-include` entry duplicated files
   the package list already carried, and hatchling refuses to add the same path twice.
   Nothing exercised it — `uv sync` installs the source in place — so it was broken for as

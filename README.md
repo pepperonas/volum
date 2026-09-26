@@ -13,11 +13,11 @@ machine. No cloud, no account, no telemetry, no remote inference.
 > closed solid, exported as STL and 3MF at real millimetres), and the CLI. Measured on an
 > M1 Pro (16 GB) over MPS: **50 s, 41,864 vertices, watertight** with TripoSR.
 >
-> The macOS application is packaged and has been run from its bundle. Windows and Linux
-> bundles are wired into CI and have not been built yet
-> ([`docs/packaging.md`](docs/packaging.md)). Not done: signing, updates, multi-image, and
-> TRELLIS.2 — integrated and licence-checked, but not yet run here. See
-> [`docs/decision.md`](docs/decision.md).
+> The macOS application is packaged and runs from `/Applications`. The Windows and Linux
+> installers build in CI and have not been started by anyone
+> ([`docs/packaging.md`](docs/packaging.md) keeps that distinction). Not done:
+> notarisation, updates, multi-image, and TRELLIS.2 — integrated and licence-checked, but
+> not yet run here. See [`docs/decision.md`](docs/decision.md).
 
 ## What VOLUM is meant to be
 
@@ -60,9 +60,11 @@ pnpm install
 pnpm tauri dev
 ```
 
-To build an installer, see [`docs/packaging.md`](docs/packaging.md). The binaries are
-unsigned, so macOS refuses to open the application until you clear its quarantine
-attribute: `xattr -dr com.apple.quarantine /Applications/VOLUM.app`.
+On macOS, `bash scripts/install-macos.sh` builds it and installs it into `/Applications`.
+Releases are ad-hoc signed but **not notarised**, so a downloaded build needs its
+quarantine attribute cleared once:
+`xattr -dr com.apple.quarantine /Applications/VOLUM.app`. Details and the other platforms:
+[`docs/packaging.md`](docs/packaging.md).
 
 ### Or from the command line
 

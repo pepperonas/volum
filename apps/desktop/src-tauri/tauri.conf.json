@@ -47,6 +47,9 @@
     "longDescription": "Turn photographs into printable 3D models entirely on your own machine. No cloud, no account, no telemetry.",
     "resources": [
       "runtime/**/*"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

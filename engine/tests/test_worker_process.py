@@ -7,6 +7,7 @@ cosmetic: the worker must actually die, even when it ignores SIGTERM.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -74,3 +75,45 @@ def test_cancel_before_start_never_launches_the_child(tmp_path: Path) -> None:
     with pytest.raises(ProviderExecutionError, match="before the model started"):
         worker.run(lambda *_: None)
     assert worker._process is None
+
+
+ECHO_ENV = """
+import json, os, sys
+sys.stdin.read()
+print(json.dumps({"type": "error", "message": "reporting the environment",
+                  "technical": json.dumps({k: v for k, v in os.environ.items()
+                                           if k.startswith("PYTHON")}),
+                  "suggestions": []}), flush=True)
+"""
+
+
+def test_a_worker_may_write_bytecode_even_when_the_engine_may_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bundled engine runs with PYTHONDONTWRITEBYTECODE because its own
+    bundle is code-signed and sealed. A provider's environment lives in the
+    data directory, is not sealed, and pays for every missing `.pyc` on every
+    job — torch alone is thousands of modules. The setting must not be
+    inherited into the worker.
+    """
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    worker = WorkerProcess(Path(sys.executable), _script(tmp_path, ECHO_ENV), _request(tmp_path))
+
+    with pytest.raises(ProviderExecutionError) as excinfo:
+        worker.run(lambda *_: None)
+
+    reported = json.loads(excinfo.value.technical)
+    assert "PYTHONDONTWRITEBYTECODE" not in reported
+
+
+def test_the_rest_of_the_environment_reaches_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only that one variable is dropped; a worker still needs everything else.
+    monkeypatch.setenv("PYTHONHASHSEED", "12345")
+    worker = WorkerProcess(Path(sys.executable), _script(tmp_path, ECHO_ENV), _request(tmp_path))
+
+    with pytest.raises(ProviderExecutionError) as excinfo:
+        worker.run(lambda *_: None)
+
+    assert json.loads(excinfo.value.technical)["PYTHONHASHSEED"] == "12345"
