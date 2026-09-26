@@ -24,6 +24,14 @@ from .install_spec import InstallSpec, get_install_spec
 from .registry import get_model
 
 MANIFEST_FILE = "install.json"
+
+#: Where a packaged application says its bundled `uv` is.
+#:
+#: The Model Manager builds a virtual environment per provider, and a bundled
+#: application has no business assuming PATH holds the tool that does it — or
+#: any tool at all. The desktop shell sets this from the runtime it ships
+#: (`docs/adr/0003-packaging-runtime.md`).
+UV_ENV = "VOLUM_UV_BINARY"
 SHIM_DIRECTORY = Path(__file__).resolve().parent.parent / "providers" / "shims"
 CONFIG_DIRECTORY = Path(__file__).resolve().parent / "pipeline_configs"
 
@@ -132,10 +140,18 @@ class ModelManager:
     ) -> None:
         self.root = models_root
         self.root.mkdir(parents=True, exist_ok=True)
-        self._uv = uv_binary or shutil.which("uv") or "uv"
+        # Explicit argument, then the bundled one, then whatever is installed.
+        # An empty variable means the same as an unset one; otherwise a
+        # packaging mistake would have the manager trying to run "".
+        self._uv = uv_binary or os.environ.get(UV_ENV, "").strip() or shutil.which("uv") or "uv"
         self._run_command = runner or run_command
 
     # --- layout -----------------------------------------------------------
+
+    @property
+    def uv_binary(self) -> str:
+        """The `uv` this manager builds provider environments with."""
+        return self._uv
 
     def directory(self, model_id: str) -> Path:
         """Per-model directory, with the id validated rather than trusted."""

@@ -10,6 +10,7 @@ The real download is covered by a marked integration test that CI skips.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from volum_core.models.install_spec import (
 from volum_core.models.manager import (
     MANIFEST_FILE,
     SHIM_DIRECTORY,
+    UV_ENV,
     CommandResult,
     InstallManifest,
     run_command,
@@ -487,3 +489,49 @@ def test_site_packages_is_found_in_both_layouts(manager: ModelManager) -> None:
     posix = venv / "lib" / "python3.11" / "site-packages"
     posix.mkdir(parents=True)
     assert manager._site_packages("m") == posix
+
+
+# --- finding uv inside a packaged application --------------------------------
+
+
+def test_the_bundled_uv_is_preferred_over_whatever_is_on_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packaged application ships its own uv and must use it.
+
+    The Model Manager builds a virtual environment per provider, and in a
+    bundle there is no reason to believe PATH holds the right tool — or any
+    tool. The shell names the bundled one in the environment
+    (``docs/adr/0003-packaging-runtime.md``).
+    """
+    bundled = tmp_path / "runtime" / "bin" / "uv"
+    bundled.parent.mkdir(parents=True)
+    bundled.touch()
+    monkeypatch.setenv(UV_ENV, str(bundled))
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/local/bin/uv")
+
+    assert ModelManager(tmp_path / "models").uv_binary == str(bundled)
+
+
+def test_an_explicit_uv_still_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(UV_ENV, "/bundle/uv")
+    manager = ModelManager(tmp_path / "models", uv_binary="/chosen/uv")
+    assert manager.uv_binary == "/chosen/uv"
+
+
+def test_without_a_bundle_uv_comes_from_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(UV_ENV, raising=False)
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/local/bin/uv")
+    assert ModelManager(tmp_path / "models").uv_binary == "/usr/local/bin/uv"
+
+
+def test_an_empty_bundle_variable_is_not_a_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unset variable and one set to nothing must mean the same thing;
+    # otherwise the manager would try to run "".
+    monkeypatch.setenv(UV_ENV, "")
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/local/bin/uv")
+    assert ModelManager(tmp_path / "models").uv_binary == "/usr/local/bin/uv"

@@ -308,11 +308,15 @@ memory for the session.
 
 ## 10. Packaging
 
-Thin installer, fat data directory. The bundle carries the shell, frontend, `volum_core`,
-the CLI and a relocatable interpreter; heavy ML dependencies and all weights install on
-first use through the Model Manager. App updates and model updates are independent
-(spec §40). macOS builds are arm64-native; no universal binary, because an x86-64 slice
-could not run the primary provider.
+Thin installer, fat data directory. The bundle carries the shell, the frontend and a
+relocatable CPython with the engine installed into it; heavy ML dependencies and all
+weights install on first use through the Model Manager. macOS builds are arm64-native; no
+universal binary, because an x86-64 slice could not run the primary provider.
+
+One interpreter serves two jobs — it runs the engine, and it is the base that provider
+environments are built from — which is why the bundle carries a real Python rather than a
+frozen binary (`docs/adr/0003-packaging-runtime.md`). Sizes, the per-platform status and
+what is and is not signed: `docs/packaging.md`.
 
 ## 11. Versioning
 

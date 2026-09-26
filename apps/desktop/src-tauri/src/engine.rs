@@ -20,8 +20,10 @@ pub const TOKEN_ENV: &str = "VOLUM_ENGINE_TOKEN";
 /// Developer escape hatch: a JSON array naming the command to run instead.
 pub const COMMAND_ENV: &str = "VOLUM_ENGINE_COMMAND";
 
-/// Name of the bundled sidecar binary, without the platform suffix.
-pub const SIDECAR_NAME: &str = "volum-engine";
+/// Where the engine finds the `uv` it builds provider environments with.
+/// Without this a bundled application would look on `PATH`, which it has no
+/// business relying on.
+pub const UV_ENV: &str = "VOLUM_UV_BINARY";
 
 /// How much of the engine's stderr to keep for error messages.
 const STDERR_KEEP_BYTES: usize = 8 * 1024;
@@ -138,6 +140,8 @@ pub struct EngineCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Extra environment for the child, on top of this process's own.
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -148,14 +152,20 @@ pub enum ResolveError {
 
 /// Decide how to start the engine.
 ///
-/// Order: the explicit override, then a sidecar bundled next to this
-/// executable, then — in a development build only — `uv run` in the
+/// Order: the explicit override, then the runtime bundled with the
+/// application, then — in a development build only — `uv run` in the
 /// repository's engine directory. A packaged application that happens to sit
-/// inside a checkout must still use its own bundled engine, which is why
-/// bundled comes first.
+/// inside a checkout must still use its own bundled runtime, which is why
+/// bundled comes before the workspace.
+///
+/// The bundled runtime is a relocatable CPython with the engine installed into
+/// it (`docs/adr/0003-packaging-runtime.md`), so it is started as a module
+/// rather than through the `volum-engine` console script: a console script
+/// carries the absolute shebang written at install time, which points at the
+/// machine that built it.
 pub fn resolve_command(
     explicit: Option<&str>,
-    exe_dir: &Path,
+    runtime_dir: Option<&Path>,
     workspace_engine_dir: Option<&Path>,
     exists: &dyn Fn(&Path) -> bool,
 ) -> Result<EngineCommand, ResolveError> {
@@ -172,16 +182,27 @@ pub fn resolve_command(
             program: PathBuf::from(program),
             args,
             cwd: None,
+            env: Vec::new(),
         });
     }
 
-    let bundled = exe_dir.join(sidecar_file_name());
-    if exists(&bundled) {
-        return Ok(EngineCommand {
-            program: bundled,
-            args: vec![EXIT_WITH_PARENT.to_string()],
-            cwd: None,
-        });
+    if let Some(runtime) = runtime_dir {
+        let python = runtime.join(runtime_python());
+        if exists(&python) {
+            return Ok(EngineCommand {
+                program: python,
+                args: vec![
+                    "-m".into(),
+                    "volum_engine.main".into(),
+                    EXIT_WITH_PARENT.into(),
+                ],
+                cwd: None,
+                env: vec![(
+                    UV_ENV.to_string(),
+                    runtime.join(runtime_uv()).display().to_string(),
+                )],
+            });
+        }
     }
 
     if let Some(engine_dir) = workspace_engine_dir {
@@ -190,6 +211,7 @@ pub fn resolve_command(
                 program: PathBuf::from("uv"),
                 args: vec!["run".into(), "volum-engine".into(), EXIT_WITH_PARENT.into()],
                 cwd: Some(engine_dir.to_path_buf()),
+                env: Vec::new(),
             });
         }
     }
@@ -204,12 +226,24 @@ fn bad_explicit(raw: &str) -> ResolveError {
     ))
 }
 
-/// The bundled sidecar's file name for this platform.
-pub fn sidecar_file_name() -> String {
+/// The interpreter inside the bundled runtime, relative to the runtime root.
+///
+/// `python3` rather than `python3.12`: the unversioned link is what survives a
+/// bump of the bundled interpreter without a matching change here.
+pub fn runtime_python() -> PathBuf {
     if cfg!(windows) {
-        format!("{SIDECAR_NAME}.exe")
+        PathBuf::from("python.exe")
     } else {
-        SIDECAR_NAME.to_string()
+        PathBuf::from("bin").join("python3")
+    }
+}
+
+/// `uv` inside the bundled runtime, relative to the runtime root.
+pub fn runtime_uv() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from("Scripts").join("uv.exe")
+    } else {
+        PathBuf::from("bin").join("uv")
     }
 }
 
@@ -292,6 +326,7 @@ pub fn start(
         .args(&command.args)
         // The token travels in the environment, never in argv.
         .env(TOKEN_ENV, token)
+        .envs(command.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         // stdin is piped and then held: closing it is how the engine learns
         // that this process is gone.
         .stdin(Stdio::piped())
@@ -563,7 +598,7 @@ mod tests {
     fn an_explicit_command_wins() {
         let cmd = resolve_command(
             Some(r#"["uv","run","volum-engine"]"#),
-            Path::new("/apps"),
+            Some(Path::new("/bundle/runtime")),
             Some(Path::new("/repo/engine")),
             &|_| true,
         )
@@ -579,7 +614,7 @@ mod tests {
         // A whitespace-split string would break on any path containing a space,
         // which on macOS is most of them. The error says the expected form.
         for bad in ["uv run volum-engine", "[]", "[1,2]", "{\"a\":1}", "["] {
-            match resolve_command(Some(bad), Path::new("/apps"), None, &nothing_exists) {
+            match resolve_command(Some(bad), None, None, &nothing_exists) {
                 Err(ResolveError::BadExplicit(message)) => {
                     assert!(
                         message.contains('['),
@@ -592,25 +627,66 @@ mod tests {
     }
 
     #[test]
-    fn a_bundled_sidecar_is_used_when_present() {
-        let exe_dir = Path::new("/Applications/VOLUM.app/Contents/MacOS");
-        let expected = exe_dir.join(sidecar_file_name());
-        let cmd = resolve_command(None, exe_dir, Some(Path::new("/repo/engine")), &|p| {
-            p == expected
+    fn the_bundled_runtime_is_used_when_present() {
+        let runtime = Path::new("/Applications/VOLUM.app/Contents/Resources/runtime");
+        let python = runtime.join(runtime_python());
+        let cmd = resolve_command(None, Some(runtime), Some(Path::new("/repo/engine")), &|p| {
+            p == python
         })
         .expect("should resolve");
-        assert_eq!(cmd.program, expected);
+        assert_eq!(cmd.program, python);
         assert!(cmd.args.iter().any(|a| a == "--exit-with-parent"));
         assert_eq!(cmd.cwd, None);
     }
 
     #[test]
+    fn the_bundled_runtime_is_started_as_a_module() {
+        // Not through the `volum-engine` console script: a console script
+        // carries the absolute shebang it was written with at install time,
+        // which points at the build machine, not at wherever this was installed.
+        let runtime = Path::new("/bundle/runtime");
+        let cmd = resolve_command(None, Some(runtime), None, &|_| true).expect("should resolve");
+        assert_eq!(&cmd.args[..2], ["-m", "volum_engine.main"]);
+    }
+
+    #[test]
+    fn the_bundled_runtime_tells_the_engine_where_uv_is() {
+        // The Model Manager builds a virtual environment per provider. A
+        // bundled application has no business looking for that tool on PATH.
+        let runtime = Path::new("/bundle/runtime");
+        let cmd = resolve_command(None, Some(runtime), None, &|_| true).expect("should resolve");
+        let uv = cmd
+            .env
+            .iter()
+            .find(|(key, _)| key == UV_ENV)
+            .expect("the bundled uv should be named");
+        assert!(
+            Path::new(&uv.1).starts_with(runtime),
+            "uv must come from the bundle, got {}",
+            uv.1
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_is_not_there_is_not_used() {
+        // A resource directory always exists; the runtime inside it might not,
+        // and falling through to the checkout is better than failing to start.
+        let engine_dir = Path::new("/repo/engine");
+        let cmd = resolve_command(
+            None,
+            Some(Path::new("/bundle/runtime")),
+            Some(engine_dir),
+            &|p| p == engine_dir,
+        )
+        .expect("should resolve");
+        assert_eq!(cmd.program, PathBuf::from("uv"));
+    }
+
+    #[test]
     fn the_workspace_is_only_the_last_resort() {
         let engine_dir = Path::new("/repo/engine");
-        let cmd = resolve_command(None, Path::new("/apps"), Some(engine_dir), &|p| {
-            p == engine_dir
-        })
-        .expect("should resolve");
+        let cmd = resolve_command(None, None, Some(engine_dir), &|p| p == engine_dir)
+            .expect("should resolve");
         assert_eq!(cmd.program, PathBuf::from("uv"));
         assert_eq!(cmd.cwd.as_deref(), Some(engine_dir));
         assert!(cmd.args.iter().any(|a| a == "volum-engine"));
@@ -619,7 +695,7 @@ mod tests {
     #[test]
     fn with_nothing_to_run_the_failure_is_explicit() {
         assert_eq!(
-            resolve_command(None, Path::new("/apps"), None, &nothing_exists),
+            resolve_command(None, None, None, &nothing_exists),
             Err(ResolveError::NothingFound)
         );
     }
@@ -629,8 +705,9 @@ mod tests {
         // Otherwise a crashed shell leaves an engine holding the GPU.
         let engine_dir = Path::new("/repo/engine");
         let all = [
-            resolve_command(Some(r#"["x"]"#), Path::new("/a"), None, &nothing_exists),
-            resolve_command(None, Path::new("/a"), Some(engine_dir), &|_| true),
+            resolve_command(Some(r#"["x"]"#), None, None, &nothing_exists),
+            resolve_command(None, Some(Path::new("/bundle/runtime")), None, &|_| true),
+            resolve_command(None, None, Some(engine_dir), &|_| true),
         ];
         for cmd in all {
             let cmd = cmd.expect("should resolve");

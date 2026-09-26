@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import zipfile
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -113,3 +114,48 @@ def test_the_suite_is_fenced_off_from_the_real_user_directories() -> None:
     assert os.environ.get("VOLUM_DATA_DIR"), "conftest must set VOLUM_DATA_DIR"
     assert "Application Support" not in str(default_config_dir())
     assert not str(settings_file()).startswith(str(Path.home() / ".config"))
+
+
+# --- the engine as a distributable ------------------------------------------
+
+
+@pytest.mark.slow
+def test_the_engine_builds_as_a_wheel_carrying_everything_it_needs(tmp_path: Path) -> None:
+    """A wheel is how the engine reaches the bundled application.
+
+    Nothing else exercised this path — `uv sync` installs the source in place —
+    so the wheel build was broken for as long as it had existed: a
+    `force-include` entry duplicated files that the package list already
+    carried, and hatchling refuses to add the same path twice.
+
+    The files below are the ones that are easy to lose, because none of them is
+    an ordinary imported module: the PEP 561 markers (without which mypy treats
+    the installed package as untyped), the compatibility shim written into a
+    provider's environment, VOLUM's own pipeline configuration, and the worker
+    scripts, which are read as files rather than imported.
+    """
+    built = subprocess.run(  # noqa: S603 - a fixed argv, never a shell
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],  # noqa: S607 - uv builds this project
+        cwd=ROOT / "engine",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, f"the wheel did not build:\n{built.stdout}\n{built.stderr}"
+
+    wheels = list(tmp_path.glob("*.whl"))
+    assert len(wheels) == 1, f"expected one wheel, got {wheels}"
+
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        names = set(wheel.namelist())
+
+    for required in (
+        "volum_core/py.typed",
+        "volum_cli/py.typed",
+        "volum_engine/py.typed",
+        "volum_core/providers/shims/torchmcubes_shim.py",
+        "volum_core/models/pipeline_configs/trellis2_geometry_512.json",
+        "volum_core/providers/workers/triposr_worker.py",
+        "volum_core/providers/workers/trellis2_worker.py",
+    ):
+        assert required in names, f"{required} is missing from the wheel"

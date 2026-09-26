@@ -184,7 +184,8 @@ jobs:
         run: |
           set -euo pipefail
           for f in README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md \
-                   docs/licenses.md docs/architecture.md docs/privacy.md; do
+                   docs/licenses.md docs/architecture.md docs/privacy.md \
+                   docs/packaging.md; do
             test -f "$f" || { echo "::error::Missing $f"; exit 1; }
           done
           echo "All required documents present."

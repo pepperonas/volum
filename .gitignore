@@ -71,3 +71,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# The bundled engine runtime: a few hundred megabytes of third-party binaries,
+# rebuilt from pinned inputs by scripts/build_runtime.py.
+/apps/desktop/src-tauri/runtime/

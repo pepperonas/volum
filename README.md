@@ -13,8 +13,11 @@ machine. No cloud, no account, no telemetry, no remote inference.
 > closed solid, exported as STL and 3MF at real millimetres), and the CLI. Measured on an
 > M1 Pro (16 GB) over MPS: **50 s, 41,864 vertices, watertight** with TripoSR.
 >
-> Not done yet: packaging and installers, multi-image, and TRELLIS.2 — integrated and
-> licence-checked, but not yet run here. See [`docs/decision.md`](docs/decision.md).
+> The macOS application is packaged and has been run from its bundle. Windows and Linux
+> bundles are wired into CI and have not been built yet
+> ([`docs/packaging.md`](docs/packaging.md)). Not done: signing, updates, multi-image, and
+> TRELLIS.2 — integrated and licence-checked, but not yet run here. See
+> [`docs/decision.md`](docs/decision.md).
 
 ## What VOLUM is meant to be
 
@@ -56,6 +59,10 @@ cd apps/desktop
 pnpm install
 pnpm tauri dev
 ```
+
+To build an installer, see [`docs/packaging.md`](docs/packaging.md). The binaries are
+unsigned, so macOS refuses to open the application until you clear its quarantine
+attribute: `xattr -dr com.apple.quarantine /Applications/VOLUM.app`.
 
 ### Or from the command line
 

@@ -22,7 +22,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 /// In a development build the engine can be run straight out of the checkout.
-/// A release build has no such path — it uses its bundled sidecar or fails.
+/// A release build has no such path — it uses its bundled runtime or fails.
 #[cfg(debug_assertions)]
 const WORKSPACE_ENGINE_DIR: Option<&str> =
     Some(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../engine"));
@@ -60,6 +60,10 @@ impl EngineFailure {
 
 #[derive(Default)]
 pub struct EngineSupervisor {
+    /// `<resources>/runtime` in a packaged application; `None` when the
+    /// application has no resource directory, which is how a plain
+    /// `cargo run` behaves.
+    runtime_dir: Option<PathBuf>,
     /// The outcome of starting, computed once. Starting twice would leave an
     /// orphaned engine holding the GPU.
     outcome: AsyncMutex<Option<Result<EngineInfo, EngineFailure>>>,
@@ -67,6 +71,13 @@ pub struct EngineSupervisor {
 }
 
 impl EngineSupervisor {
+    pub fn new(runtime_dir: Option<PathBuf>) -> Self {
+        Self {
+            runtime_dir,
+            ..Self::default()
+        }
+    }
+
     pub async fn info(&self) -> Result<EngineInfo, EngineFailure> {
         let mut slot = self.outcome.lock().await;
         if let Some(cached) = slot.as_ref() {
@@ -78,7 +89,7 @@ impl EngineSupervisor {
     }
 
     async fn launch(&self) -> Result<EngineInfo, EngineFailure> {
-        let command = resolve()?;
+        let command = resolve(self.runtime_dir.as_deref())?;
         let token = engine::generate_token();
 
         let started = {
@@ -142,17 +153,13 @@ impl EngineSupervisor {
     }
 }
 
-fn resolve() -> Result<engine::EngineCommand, EngineFailure> {
+fn resolve(runtime_dir: Option<&Path>) -> Result<engine::EngineCommand, EngineFailure> {
     let explicit = std::env::var(engine::COMMAND_ENV).ok();
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
     let workspace = WORKSPACE_ENGINE_DIR.map(PathBuf::from);
 
     engine::resolve_command(
         explicit.as_deref(),
-        &exe_dir,
+        runtime_dir,
         workspace.as_deref(),
         &|path| path.exists(),
     )
@@ -165,9 +172,11 @@ fn resolve() -> Result<engine::EngineCommand, EngineFailure> {
         engine::ResolveError::NothingFound => EngineFailure::new(
             "VOLUM could not find its engine.",
             format!(
-                "no {} next to {}, and no development checkout",
-                engine::sidecar_file_name(),
-                exe_dir.display()
+                "no {} under {}, and no development checkout",
+                engine::runtime_python().display(),
+                runtime_dir
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_else(|| "<no resource directory>".into())
             ),
             &["Reinstall VOLUM — the engine is missing from this installation."],
         ),
@@ -284,7 +293,17 @@ async fn engine_info(supervisor: State<'_, EngineSupervisor>) -> Result<EngineIn
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(EngineSupervisor::default())
+        .setup(|app| {
+            // The runtime ships as a resource, so where it is can only be asked
+            // of the application once it exists.
+            let runtime = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|resources| resources.join("runtime"));
+            app.manage(EngineSupervisor::new(runtime));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![engine_info, save_artifact])
         .build(tauri::generate_context!())
         .expect("error while building the VOLUM window")

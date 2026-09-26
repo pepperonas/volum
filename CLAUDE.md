@@ -14,9 +14,14 @@ CLI, HTTP engine, hardware detection, doctor, model manager, job system, provide
 abstraction, TripoSR and TRELLIS.2 providers, validation, printable export, the shared
 application service and the Tauri app are all in place.
 
-Not done: packaging and installers (spec §39, §70), multi-image, and TRELLIS.2 — it is
-integrated and licence-checked but has never been installed or run here (needs DINOv3
-access and an idle machine).
+**The macOS application is packaged and verified**: a 239 MB `.app` / 82 MB `.dmg` that
+starts its engine from a bundled relocatable CPython with no development checkout in
+sight. Windows and Linux bundles are wired into a release workflow and have never been
+built.
+
+Not done: signing (no certificates), updates, multi-image, and TRELLIS.2 — integrated and
+licence-checked but never installed or run here (needs DINOv3 access and an idle
+machine).
 
 The full specification is `VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines,
 German) — it is the requirements document and takes precedence over this file on
@@ -40,6 +45,7 @@ cd engine && uv run --with mypy mypy --platform win32   # catches Windows-only t
 cd apps/desktop && pnpm install
 cd apps/desktop && pnpm tauri dev                      # window + engine + Vite
 cd apps/desktop && pnpm test && pnpm lint && pnpm typecheck
+cd apps/desktop && pnpm build                          # ⚠️ cargo cannot compile without dist/
 cd apps/desktop/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cd apps/desktop/src-tauri && cargo test                # pure unit tests
 cd apps/desktop/src-tauri && cargo test --test real_engine -- --ignored  # starts the real engine
@@ -50,6 +56,10 @@ uv run volum models list | show <id> | disk
 uv run volum models install triposr                    # ~2.5 GB, ~90 s
 uv run volum generate image.png --seed 7               # real inference
 uv run volum generate image.png --print --size-mm 60   # STL + 3MF, repaired, validated
+
+# Packaging (docs/packaging.md)
+python3 scripts/build_runtime.py                       # the bundled engine runtime, ~220 MB
+cd apps/desktop && CI=true pnpm tauri build            # ⚠️ CI=true or the DMG step hangs on Finder
 
 # HTTP engine (the Tauri sidecar) — needs a token, binds 127.0.0.1:<ephemeral>
 export VOLUM_ENGINE_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
@@ -112,6 +122,10 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
 - **A non-loopback announcement is refused, `localhost` included.** A name is resolved
   through the machine's host file, which is not something to trust when deciding where to
   send a session token.
+- **The bundle carries a real CPython, not a frozen binary.** The Model Manager builds a
+  virtual environment per provider, and a frozen binary has no interpreter to build one
+  from (ADR-0003). One interpreter runs the engine and bases the provider environments;
+  `uv` ships beside it and the shell names it in `VOLUM_UV_BINARY`.
 
 ## Verify against a clean checkout, not your working copy
 
@@ -126,7 +140,11 @@ both times because the working copy carried artefacts a fresh checkout does not:
 
 Before pushing anything structural: `git clone . /tmp/verify && cd /tmp/verify/engine &&
 uv sync --extra dev --extra engine && uv run ruff check src tests && uv run --with mypy mypy
-&& uv run pytest`.
+&& uv run pytest`. For the window, add `cd ../apps/desktop && pnpm install --frozen-lockfile
+&& pnpm lint && pnpm typecheck && pnpm test && pnpm build && cd src-tauri && cargo clippy
+--all-targets -- -D warnings && cargo test` — **`pnpm build` first**, because
+`tauri::generate_context!` refuses to expand when `frontendDist` points at nothing, so a
+fresh checkout cannot compile the shell at all until the frontend exists once.
 
 **The suite is fenced off from the real user directories** by an autouse fixture in
 `tests/conftest.py` that sets `VOLUM_CONFIG_DIR` and `VOLUM_DATA_DIR`. It exists because
@@ -177,6 +195,15 @@ a service test once saved a fake Hugging Face token into the developer's real
   this project targets.
 - **Look up dependency versions; do not guess them.** Four invented version numbers in one
   `package.json` cost an install cycle each.
+- **`uv` refuses to install into its own managed Pythons** (`EXTERNALLY-MANAGED`).
+  `build_runtime.py` removes that marker from its *copy*, which is a build artefact and no
+  longer uv's to manage.
+- **`numpy.testing` is public API, not a test directory.** Stripping directories named
+  `testing` produced a runtime that installed cleanly and could not import scipy. Only
+  `tests` and `__pycache__` are safe, and the build script verifies what it built.
+- **On macOS the DMG needs `CI=true`.** `create-dmg` opens a Finder window it never
+  closes, and Finder then dissents the unmount — `diskutil eject` names the process.
+  `CI=true` makes Tauri pass `--skip-jenkins`.
 - **Model dependency pins are load-bearing.** TripoSR's `transformers==4.35.0` is not
   housekeeping: transformers 5.x renamed the ViT internals, so the published checkpoint
   fails to load entirely. Where a pin cannot be carried, the install manifest records what

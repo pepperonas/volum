@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `localhost` included, since a name is resolved through the machine's host file.
 - An error in one screen no longer blanks the window: the screens sit inside an error
   boundary that keeps the navigation alive and clears on the next route.
+- **A packaged macOS application.** A 239 MB `.app` / 82 MB `.dmg` carrying a relocatable
+  CPython with the engine installed into it, plus `uv` for building provider
+  environments. Verified by running it: the packaged application starts its engine from
+  the bundle with no development checkout in sight. `scripts/build_runtime.py` builds the
+  runtime and verifies what it built. Windows and Linux bundles are wired into a release
+  workflow (`.github/workflows/release.yml`) and have not been built yet; `docs/packaging.md`
+  says which of the three are measurements and which are arrangements.
+- Nothing is signed. macOS will refuse to open the application until its quarantine
+  attribute is removed, and Windows SmartScreen will warn. Signing needs certificates this
+  project does not have; where they plug in is documented.
 
 ### Changed
 - TRELLIS.2's commercial-use status moved from `UNKNOWN` to `CONDITIONAL`: the four
@@ -84,6 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the "Built with DINOv3" attribution and the BiRefNet substitution.
 
 ### Fixed
+- **The engine could never be built as a wheel.** A `force-include` entry duplicated files
+  the package list already carried, and hatchling refuses to add the same path twice.
+  Nothing exercised it — `uv sync` installs the source in place — so it was broken for as
+  long as it had existed. Packaging is what found it, and a test now pins both that the
+  wheel builds and that it carries the files that are easy to lose: the PEP 561 markers,
+  the compatibility shim, the pipeline configuration and the worker scripts.
 - A job's original file names were lost. Inputs are staged under UUID names — correctly,
   they are copies inside the job — but the record kept nothing else, so the library had
   only a UUID to show. `input_names` keeps the name the file had when it was chosen.

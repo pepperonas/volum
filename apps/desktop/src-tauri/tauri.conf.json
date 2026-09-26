@@ -27,7 +27,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "deb", "appimage"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,6 +44,9 @@
     "copyright": "Martin Pfeffer",
     "category": "GraphicsAndDesign",
     "shortDescription": "Local-first image-to-3D",
-    "longDescription": "Turn photographs into printable 3D models entirely on your own machine. No cloud, no account, no telemetry."
+    "longDescription": "Turn photographs into printable 3D models entirely on your own machine. No cloud, no account, no telemetry.",
+    "resources": [
+      "runtime/**/*"
+    ]
   }
 }

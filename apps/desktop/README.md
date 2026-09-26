@@ -16,8 +16,15 @@ Checks, all of which CI runs:
 pnpm lint               # type-aware ESLint
 pnpm typecheck
 pnpm test               # Vitest
+pnpm build              # ⚠️ before any cargo command — see below
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
+
+⚠️ **The Rust build needs `dist/` to exist.** `tauri::generate_context!` reads
+`tauri.conf.json` at compile time and refuses to expand if `frontendDist` points at
+nothing, so a fresh checkout cannot even run `cargo test` until the frontend has been
+built once. `pnpm tauri dev` and `pnpm tauri build` handle this themselves; a bare cargo
+command does not. An empty `dist/index.html` is enough, which is what CI creates.
 
 ## Running against a particular engine
 

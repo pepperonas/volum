@@ -26,10 +26,9 @@ fn engine_dir() -> PathBuf {
 }
 
 fn command() -> EngineCommand {
-    engine::resolve_command(None, Path::new("/nonexistent"), Some(&engine_dir()), &|p| {
-        p.exists()
-    })
-    .expect("the workspace engine should resolve")
+    // No bundled runtime: this test is about the development path.
+    engine::resolve_command(None, None, Some(&engine_dir()), &|p| p.exists())
+        .expect("the workspace engine should resolve")
 }
 
 /// A data directory of its own, so a test never touches the user's models.
