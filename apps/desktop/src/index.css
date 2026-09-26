@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+/*
+ * VOLUM reads as an instrument, not a page.
+ *
+ * Dark only, deliberately: this is a tool whose main surface is a 3D viewport,
+ * and a light chrome around a dark viewport fights the thing being looked at —
+ * the same reason Blender, Fusion and every slicer settle here.
+ *
+ * The accent is the periwinkle from the application mark. Everything else is a
+ * near-neutral with a cool cast, so the only saturated colour on screen is
+ * either the model or something that needs a decision.
+ */
+@theme {
+  --color-ground: #0b0e13;
+  --color-surface: #12161f;
+  --color-raised: #181d28;
+  --color-hairline: #242b38;
+  --color-hairline-strong: #323b4d;
+
+  --color-ink: #e6e9f0;
+  --color-ink-muted: #9aa3b5;
+  --color-ink-faint: #6b7487;
+
+  --color-accent: #b3c5ff;
+  --color-accent-dim: #6e86c8;
+  --color-on-accent: #0b0e13;
+
+  --color-ok: #7fd1a6;
+  --color-warn: #f0c274;
+  --color-bad: #f28b82;
+
+  --radius-card: 10px;
+
+  --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    /* A desktop window is not a document: nothing here scrolls by rubber-band,
+       and selecting the chrome is never what was meant. */
+    overscroll-behavior: none;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* Measurements are the content of this application, so every number is
+     monospaced and tabular — a figure that changes width as it ticks is a
+     figure that cannot be read while it moves. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Text the user might genuinely want to copy: paths, hashes, errors. */
+  .selectable {
+    user-select: text;
+    cursor: text;
+  }
+
+  /* A range input renders its track with the platform's own light chrome,
+     which on this ground reads as a bright bar across the card. */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-raised);
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    border: 2px solid var(--color-ground);
+    box-shadow: 0 0 0 1px var(--color-accent-dim);
+  }
+
+  input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    border: 1px solid var(--color-hairline-strong);
+    border-radius: 4px;
+    background: var(--color-ground);
+    cursor: pointer;
+    position: relative;
+  }
+  input[type="checkbox"]:checked {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid var(--color-on-accent);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="number"] {
+    color-scheme: dark;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-hairline-strong);
+    border-radius: 5px;
+    border: 2px solid var(--color-ground);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer utilities {
+  /* macOS draws its window buttons over the top-left corner; this keeps the
+     first row of anything from sitting underneath them. */
+  .title-gap {
+    padding-top: 28px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

@@ -1,0 +1,43 @@
+[package]
+name = "volum-desktop"
+version = "0.1.0"
+description = "VOLUM — local-first image-to-3D"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+[lib]
+# Tauri 2 builds the app as a library so the mobile targets can link it; the
+# binary below is a thin wrapper. Keeping the logic in the lib is also what
+# makes it unit-testable.
+name = "volum_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.6", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.151"
+getrandom = "0.4.3"
+# Loopback only, and deliberately without any TLS feature: the engine speaks
+# plaintext HTTP on 127.0.0.1, so a build that *cannot* do TLS is a build that
+# cannot accidentally be pointed at a remote host.
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+tokio = { version = "1", features = ["time"] }
+# The window needs real filesystem paths for the images it sends to the
+# engine, and a webview file input deliberately does not give them.
+tauri-plugin-dialog = "2.7.3"
+
+[dev-dependencies]
+# The end-to-end test talks to the real engine and checks the child actually
+# went away; neither belongs in the shipped binary.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "blocking"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decided in exactly one place.
 - Input images are validated by content (PNG, JPEG, WebP), size-limited, copied into
   the job under UUID names and hashed; `asset.json` records the SHA-256 of each input.
+- **The desktop application.** A Tauri 2 shell that starts the engine, hands the window
+  its address and session token, and takes it down again; five screens (Generate,
+  Library, Models, System, Settings) plus a result view with a Three.js viewer —
+  orbit/pan/zoom, clay, material and wireframe, all lit by explicit lights rather than
+  an HDRI fetched from a CDN. Jobs stream their stages live; models install with their
+  full licence chain on screen; the system view shows what this machine can honestly run.
+- The window is granted a file picker and a save dialog and nothing else. The engine is
+  spawned by Rust, files are read and written by Rust, and the webview has no shell,
+  process or filesystem permission at all.
+- The shell refuses an engine announcement whose host is not a literal loopback address —
+  `localhost` included, since a name is resolved through the machine's host file.
+- An error in one screen no longer blanks the window: the screens sit inside an error
+  boundary that keeps the navigation alive and clears on the next route.
 
 ### Changed
 - TRELLIS.2's commercial-use status moved from `UNKNOWN` to `CONDITIONAL`: the four
@@ -71,6 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the "Built with DINOv3" attribution and the BiRefNet substitution.
 
 ### Fixed
+- A job's original file names were lost. Inputs are staged under UUID names — correctly,
+  they are copies inside the job — but the record kept nothing else, so the library had
+  only a UUID to show. `input_names` keeps the name the file had when it was chosen.
+- A job interrupted by a crash was credited with the time until someone noticed. One
+  showed a duration of **93:55 h** for a job that lived half a minute: recovery stamped
+  `finished_at` with the moment of recovery. It now uses the last moment the job was
+  known to be alive.
 - Cancelling a running job from another thread now ends as `cancelled`, not `failed`:
   the worker dying after the token was set, and the state machine refusing a move out
   of `cancelled`, were both being reported as failures.

@@ -13,7 +13,8 @@ The guards below are on the cause, not the symptom.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -21,9 +22,6 @@ from volum_core.config import default_config_dir, settings_file
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "engine" / "src"
-
-#: Where source lives. A .gitignore rule that matches anything in here is the bug.
-_SOURCE_ROOTS = ("engine/src", "engine/tests", "scripts", "apps")
 
 
 def _gitignore_lines() -> list[str]:
@@ -36,14 +34,26 @@ def _gitignore_lines() -> list[str]:
 
 
 def _source_directory_names() -> set[str]:
+    """Every directory name that holds a tracked file.
+
+    Asked of git rather than of the filesystem. Walking the disk counted build
+    output as source — once the desktop application had been built once,
+    ``dist/``, ``node_modules/`` and ``target/`` all existed, and the guard
+    reported the very rules that are there to ignore them. "Tracked by git" is
+    the property that actually matters: a rule that hides one of these hides
+    work someone committed.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],  # noqa: S607 - git is on PATH wherever a checkout is
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
     names: set[str] = set()
-    for root in _SOURCE_ROOTS:
-        base = ROOT / root
-        if not base.is_dir():
-            continue
-        names.update(
-            path.name for path in base.rglob("*") if path.is_dir() and path.name != "__pycache__"
-        )
+    for entry in listed.split("\0"):
+        if entry:
+            names.update(PurePosixPath(entry).parent.parts)
     return names
 
 
@@ -52,8 +62,8 @@ def test_no_unanchored_ignore_rule_matches_a_source_directory() -> None:
 
     ``dist/`` and ``build/`` legitimately need to match at any depth — the
     frontend writes into ``apps/desktop/dist``. What must never happen is an
-    unanchored rule whose name collides with a real source directory, which is
-    exactly how ``jobs/`` erased a package.
+    unanchored rule whose name collides with a directory that holds tracked
+    files, which is exactly how ``jobs/`` erased a package.
     """
     source_names = _source_directory_names()
     collisions = [

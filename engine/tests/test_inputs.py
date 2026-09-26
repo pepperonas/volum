@@ -101,3 +101,21 @@ def test_staging_validates_every_file_before_copying_any(tmp_path: Path) -> None
 def test_staging_nothing_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(InputError):
         stage_inputs([], tmp_path / "input")
+
+
+def test_staging_remembers_the_name_the_user_chose(tmp_path: Path) -> None:
+    """The staged copy has a generated name, which is right — but the library
+    then had nothing to show but a UUID. The original name is not trusted as a
+    path; it is kept as a label."""
+    source = make_png(tmp_path / "my horse.png")
+    staged = stage_inputs([source], tmp_path / "job" / "input")
+
+    assert staged[0].original_name == "my horse.png"
+    assert staged[0].path.name != "my horse.png"
+
+
+def test_the_remembered_name_is_only_ever_a_name(tmp_path: Path) -> None:
+    # It reaches the window, so it must not carry a path out of the job.
+    source = make_png(tmp_path / "x.png")
+    staged = stage_inputs([source], tmp_path / "job" / "input")
+    assert "/" not in staged[0].original_name and "\\" not in staged[0].original_name

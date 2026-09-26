@@ -7,15 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **VOLUM** — a local-first, cross-platform image-to-3D desktop application (Tauri 2 +
 React + Python engine). Public open-source project: https://github.com/pepperonas/volum
 
-**Current state: core, CLI and HTTP engine work end to end.** `volum generate image.png`
-runs real inference on this machine and produces a validated GLB — measured 63 s and
-23,095 vertices on an M1 Pro over MPS. `volum-engine` serves the same pipeline over
-HTTP + SSE on loopback; a real print job (TripoSR → repair → STL + 3MF at 50 mm) has been
-run through it, streamed, downloaded and cancelled live. Hardware detection, doctor,
-model manager, job system, provider abstraction, TripoSR and TRELLIS.2 providers,
-validation, printable export and the shared application service are in place. The
-Tauri desktop app and the 3D viewer are **not** built yet; TRELLIS.2 is integrated but
-has not been installed or run here (needs DINOv3 access and an idle machine).
+**Current state: the whole chain runs.** The desktop window starts, spawns its engine,
+generates from a photograph and shows the result in a 3D viewer — verified end to end
+(chair.png → 50 s on MPS → 41,864 vertices, watertight, STL at exactly 60.0 mm). Core,
+CLI, HTTP engine, hardware detection, doctor, model manager, job system, provider
+abstraction, TripoSR and TRELLIS.2 providers, validation, printable export, the shared
+application service and the Tauri app are all in place.
+
+Not done: packaging and installers (spec §39, §70), multi-image, and TRELLIS.2 — it is
+integrated and licence-checked but has never been installed or run here (needs DINOv3
+access and an idle machine).
 
 The full specification is `VOLUM_Masterprompt_Local_CrossPlatform.md` (2065 lines,
 German) — it is the requirements document and takes precedence over this file on
@@ -35,14 +36,13 @@ cd engine && uv run pytest tests/test_x.py::test_y     # one test
 cd engine && uv run ruff check src tests && uv run --with mypy mypy
 cd engine && uv run --with mypy mypy --platform win32   # catches Windows-only type errors
 
-# Frontend
-cd apps/desktop && pnpm install && pnpm test           # Vitest
-cd apps/desktop && pnpm test -- -t "name"              # one test
-cd apps/desktop && pnpm lint && pnpm tsc --noEmit
-
-# Desktop app
-cd apps/desktop && pnpm tauri dev
-cd apps/desktop && pnpm tauri build
+# Desktop app (Tauri shell + React window)
+cd apps/desktop && pnpm install
+cd apps/desktop && pnpm tauri dev                      # window + engine + Vite
+cd apps/desktop && pnpm test && pnpm lint && pnpm typecheck
+cd apps/desktop/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+cd apps/desktop/src-tauri && cargo test                # pure unit tests
+cd apps/desktop/src-tauri && cargo test --test real_engine -- --ignored  # starts the real engine
 
 # CLI (shares volum_core — never reimplement pipeline logic here)
 uv run volum doctor                                    # what this machine can run
@@ -103,6 +103,15 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
   producer's thread (`model_copy(deep=True)`) or two stages collapse into one frame —
   seen live as `seq 7 → 9`. Cancel is SIGTERM then SIGKILL after 5 s; a worker wedged in a
   Metal kernel ignores the first.
+- **The window is granted a file picker and a save dialog and nothing else.** The engine is
+  spawned by Rust with `std::process::Command` — not Tauri's shell plugin — and files are
+  read and written by Rust. A permission added to `capabilities/default.json` is a
+  decision, not a formality.
+- **The shell holds the engine's stdin open on purpose.** Closing it is how
+  `--exit-with-parent` fires. Dropping the handle stops the engine.
+- **A non-loopback announcement is refused, `localhost` included.** A name is resolved
+  through the machine's host file, which is not something to trust when deciding where to
+  send a session token.
 
 ## Verify against a clean checkout, not your working copy
 
@@ -157,7 +166,17 @@ a service test once saved a fake Hugging Face token into the developer's real
 - **`.gitignore` directory rules must be anchored.** `jobs/` matched
   `engine/src/volum_core/jobs/` and silently erased a whole source package from the
   repository — and ruff honours `.gitignore`, so it went unlinted too. Guarded by
-  `tests/test_repo_hygiene.py`.
+  `tests/test_repo_hygiene.py`, which asks **git** which directories hold tracked files;
+  walking the disk counted `dist/` and `node_modules/` as source as soon as the desktop
+  app had been built once. ⚠️ A pattern containing a slash is anchored to the directory
+  holding the `.gitignore`, so `gen/schemas/` matches only at the root — the one under
+  `apps/desktop/src-tauri` needs `**/gen/schemas/`.
+- **TypeScript is pinned to 5.9, not 7.** No `typescript-eslint` release supports 7
+  (`>=4.8.4 <6.1.0`), and a type checker whose results the linter cannot read is half a
+  tool. There is also no jsdom: jsdom 30 pulls undici 8, which needs a newer Node than
+  this project targets.
+- **Look up dependency versions; do not guess them.** Four invented version numbers in one
+  `package.json` cost an install cycle each.
 - **Model dependency pins are load-bearing.** TripoSR's `transformers==4.35.0` is not
   housekeeping: transformers 5.x renamed the ViT internals, so the published checkpoint
   fails to load entirely. Where a pin cannot be carried, the install manifest records what
@@ -172,6 +191,10 @@ a service test once saved a fake Hugging Face token into the developer's real
   show pipeline stages, not a fabricated number.
 - **A failed poll is not an empty result.** A silent empty mesh must fail the job, not
   export as an asset — this failure mode is documented upstream.
+- **Numbers on screen must say what they measure.** The quality report measures the mesh
+  as the model produced it, in model units; the scale to millimetres happens on export.
+  Labelling the report's dimensions "mm" because a print size was asked for read
+  "1.1 × 0.6 × 0.6 mm" for a chair exported at 60 mm.
 - **Never commit model weights.** `.gitignore` blocks the common extensions; the Model
   Manager downloads into the data directory.
 - **Verify licences from the licence text, dated.** Secondary sources were wrong on

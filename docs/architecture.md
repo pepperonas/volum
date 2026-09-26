@@ -141,6 +141,63 @@ Jobs run **one at a time** on a worker thread (one GPU, one job); further submis
 as `queued`, visibly. The engine, not the CLI, fails jobs left non-terminal by a crash at
 start-up — a CLI command beside a live engine must not declare the engine's jobs dead.
 
+## 3a. Desktop shell
+
+Implemented in `apps/desktop/` — Tauri 2 (Rust) around a React window.
+
+### The shell starts the engine; the window never can
+
+The engine is spawned by Rust with `std::process::Command`, not through Tauri's shell
+plugin. That is a security decision as much as a simplicity one: the capability manifest
+grants the webview a **file picker and a save dialog and nothing else** — no shell, no
+process, no filesystem. A compromised page cannot start a process or read a file, because
+the permission to do either was never granted.
+
+Where the engine comes from is resolved in one place, in this order:
+
+1. `VOLUM_ENGINE_COMMAND` — a JSON array of strings, e.g. `["uv","run","volum-engine"]`.
+   A JSON array rather than a command line: whitespace splitting breaks on any path
+   containing a space, which on macOS is most of them.
+2. A `volum-engine` binary next to the executable — the bundled sidecar. Checked *before*
+   the workspace so a packaged application sitting inside a checkout still uses its own.
+3. `uv run volum-engine` in the repository's engine directory. **Development builds only**;
+   a release build carries no such path.
+
+Every resolution appends `--exit-with-parent`, and the shell holds the child's stdin open
+for the life of the window. Closing it is how the engine learns the window is gone, so a
+crashed shell cannot leave an engine behind holding the GPU. Shutdown closes stdin, waits,
+then kills — the same escalation a cancelled job uses, and for the same reason.
+
+The session token is passed in the environment, never in `argv`: arguments are visible in
+the process list to every user on the machine.
+
+### What the shell refuses
+
+The announcement is parsed, not trusted. A line whose `host` is not a **literal loopback
+address** is rejected rather than connected to — `localhost` included, because a name is
+resolved through the machine's host file and that is not something to trust when deciding
+where to send a session token. Port 0, a missing field or a different event are refused
+the same way; ordinary output on stdout is ignored, because package managers and model
+libraries print there uninvited.
+
+### The one thing the window asks Rust to do
+
+`save_artifact(job_id, name, destination)` copies an artifact to a place the user picked.
+The download happens in Rust because the window has no filesystem access at all; the
+destination comes from the system dialog, so it is the user's own choice, while the job id
+and artifact name come from the window and are checked before they reach a URL.
+
+### Screens
+
+Generate (with the running job as a state of the same screen), Library, Models, System and
+Settings; a result is reached from either Generate or Library.
+
+**Library, not Projects.** Spec §28 asks for projects holding source images, configuration,
+assets, quality reports and metadata. A job directory already holds exactly that, and a
+separate Projects screen over the same data would be a second name for one thing. If
+projects later need to group several jobs, that is the point at which the concept earns
+its own screen.
+
 ## 4. Provider interface
 
 ```python
@@ -229,9 +286,25 @@ every job.
 
 ## 9. Viewer
 
-Three.js / React Three Fiber: orbit / pan / zoom / reset, auto-rotate, grid, environment
-lighting, wireframe / solid / material / texture preview, background toggle, and asset
-statistics. A loaded model is not re-parsed on view changes.
+Three.js / React Three Fiber: orbit, pan, zoom, reset, a grid that can be switched off,
+and three display modes — clay, the model's own material, and wireframe.
+
+**The lighting is written out, not loaded.** drei's `<Environment preset=…>` fetches an
+HDRI from a CDN, which would be a quiet network request in an application whose whole
+claim is that nothing leaves the machine. Three explicit lights cost nothing and keep the
+claim true.
+
+**Clay is the default.** A printed model has no colour, and a generated one often carries
+a texture that flatters the geometry; a neutral surface is what a decision about *shape*
+needs.
+
+**Wireframe draws over a fill.** A bare wireframe of an 83,000-triangle mesh is a filled
+blob at any zoom that shows the whole object — the lines sit closer together than the
+pixels. Filling behind it is the only way the mode says anything.
+
+The model is fetched once with the session token and handed to three.js as a blob URL;
+the loader cache is cleared when the screen closes, or every model viewed would stay in
+memory for the session.
 
 ## 10. Packaging
 

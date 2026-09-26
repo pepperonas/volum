@@ -433,6 +433,7 @@ class VolumService:
 
         record.input_files = [info.path for info in staged]
         record.input_hashes = [info.sha256 for info in staged]
+        record.input_names = [info.original_name for info in staged]
         self.jobs._store.save(record)
         return JobSubmission(job=record, warnings=warnings)
 

@@ -110,6 +110,9 @@ class JobRecord(BaseModel):
     #: SHA-256 of each input, in the same order. Part of what makes a result
     #: reproducible: the same seed on a different image is a different job.
     input_hashes: list[str] = Field(default_factory=list)
+    #: What each input was called when it was chosen. The staged copies are
+    #: named by UUID, so this is the only readable label a result has.
+    input_names: list[str] = Field(default_factory=list)
     parameters: dict[str, object] = Field(default_factory=dict)
     seed: int | None = None
 

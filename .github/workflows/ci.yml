@@ -71,6 +71,92 @@ jobs:
         # installed yet. On a fresh runner it must still produce a report.
         run: uv run volum doctor
 
+  desktop:
+    name: Desktop window (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # The window is where the licence text, the hardware verdicts and the
+      # printability warnings are read, so it is checked on the platform it
+      # targets first and on Linux for the cheap, fast signal.
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build the frontend
+        run: pnpm build
+
+  shell:
+    name: Desktop shell (Rust, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Tauri's Linux build needs the system webview and its dependencies.
+      - name: System dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # The build script reads tauri.conf.json, which names ../dist. It does
+      # not need the real frontend to compile, only for the directory to exist.
+      - name: Placeholder frontend
+        run: mkdir -p ../dist && touch ../dist/index.html
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # The end-to-end test is #[ignore]d: it needs uv and a synced engine and
+        # runs locally. Everything else is pure and runs here.
+        run: cargo test
+
   version:
     name: Version consistency
     runs-on: ubuntu-latest

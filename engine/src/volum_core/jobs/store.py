@@ -98,7 +98,12 @@ class JobStore:
             if record.status.is_terminal:
                 continue
             record.status = JobStatus.FAILED
-            record.finished_at = datetime.now(UTC)
+            # Not "now": the gap until VOLUM was started again is not time the
+            # job spent running, and reporting it as a duration produced
+            # readings like "93:55 h" for a job that lived half a minute. The
+            # last progress entry is the last moment it was known to be alive.
+            last_seen = record.progress[-1].at if record.progress else record.started_at
+            record.finished_at = last_seen or datetime.now(UTC)
             record.error = JobError(
                 message="This job was interrupted when VOLUM stopped.",
                 technical="Job was in a non-terminal state at engine start-up.",

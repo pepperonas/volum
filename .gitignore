@@ -50,6 +50,15 @@ test-results/
 # Rust / Tauri
 target/
 src-tauri/target/
+# Tauri regenerates its capability schemas on every build.
+#
+# ⚠️ The `**/` is load-bearing: a pattern containing a slash is anchored to the
+# directory holding the .gitignore, so a bare `gen/schemas/` would only ever
+# match one at the repository root — not the one under apps/desktop/src-tauri.
+**/gen/schemas/
+
+# Browser-automation artefacts from local verification runs.
+.playwright-mcp/
 
 # Secrets
 .env

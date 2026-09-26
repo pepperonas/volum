@@ -44,6 +44,10 @@ class InputError(ValueError):
 
 class ImageInput(BaseModel):
     path: Path
+    #: The name the file had when the user picked it. A label, never a path:
+    #: the staged copy is what anything reads, and this is what it is called.
+    #: Without it the library has only a UUID to show.
+    original_name: str
     image_type: str
     size_bytes: int
     sha256: str
@@ -97,7 +101,13 @@ def validate_image(path: Path) -> ImageInput:
             suggestions=[f"Convert the image to {_SUPPORTED_DESCRIPTION} and try again."],
         )
 
-    return ImageInput(path=path, image_type=image_type, size_bytes=size, sha256=_sha256(path))
+    return ImageInput(
+        path=path,
+        original_name=path.name,
+        image_type=image_type,
+        size_bytes=size,
+        sha256=_sha256(path),
+    )
 
 
 def stage_inputs(paths: Iterable[Path], into: Path) -> list[ImageInput]:

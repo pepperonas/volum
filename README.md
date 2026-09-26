@@ -5,16 +5,16 @@
 Turn one or more photographs into a usable, textured 3D asset — entirely on your own
 machine. No cloud, no account, no telemetry, no remote inference.
 
-> **Status: early. The engine works; the desktop app does not exist yet.**
+> **Status: early, but it runs end to end.**
 >
-> Working today: hardware detection and `volum doctor`, the model manager, real
-> single-image generation to a validated GLB, printable output (repaired to a closed
-> solid, exported as STL and 3MF at real millimetres), and the local HTTP engine that the
-> desktop app will talk to. Measured on an M1 Pro (16 GB, macOS 26.6.2) over MPS:
-> **63 s, 23,095 vertices** with TripoSR.
+> The desktop application starts, spawns its engine, generates a model from a photograph
+> and shows it in a 3D viewer. Also working: hardware detection and `volum doctor`, the
+> model manager with the full licence chain on screen, printable output (repaired to a
+> closed solid, exported as STL and 3MF at real millimetres), and the CLI. Measured on an
+> M1 Pro (16 GB) over MPS: **50 s, 41,864 vertices, watertight** with TripoSR.
 >
-> Not built yet: the Tauri desktop application and the 3D viewer. TRELLIS.2 is integrated
-> but has not been run here yet. See [`docs/decision.md`](docs/decision.md) for the plan.
+> Not done yet: packaging and installers, multi-image, and TRELLIS.2 — integrated and
+> licence-checked, but not yet run here. See [`docs/decision.md`](docs/decision.md).
 
 ## What VOLUM is meant to be
 
@@ -40,13 +40,24 @@ machine. No cloud, no account, no telemetry, no remote inference.
 Apple Silicon has priority during development. No architectural decision may exclude
 Windows or Linux.
 
-## Planned stack
+## Stack
 
-Tauri 2 · React + TypeScript + Vite · Tailwind + shadcn/ui · Three.js / React Three Fiber ·
-Python engine (`uv`) · SQLite · pytest / Vitest / Playwright · GitHub Actions ·
-Semantic Versioning + Conventional Commits. Primary export: **GLB**.
+Tauri 2 · React + TypeScript + Vite · Tailwind · Three.js / React Three Fiber ·
+Python engine (`uv`) · pytest / Vitest · GitHub Actions ·
+Semantic Versioning + Conventional Commits. Exports: **GLB** for rendering, **STL** and
+**3MF** for printing.
 
 ## Try it
+
+### The application
+
+```bash
+cd apps/desktop
+pnpm install
+pnpm tauri dev
+```
+
+### Or from the command line
 
 ```bash
 cd engine

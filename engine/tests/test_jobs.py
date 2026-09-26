@@ -7,6 +7,7 @@ the user about long-running work.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from volum_core.jobs import (
     InvalidTransitionError,
     JobError,
     JobManager,
+    JobProgress,
     JobRecord,
     JobStatus,
     JobStore,
@@ -330,3 +332,53 @@ def test_reporting_into_a_finished_job_is_ignored(manager: JobManager) -> None:
     manager.report(record, "still going")
 
     assert len(record.progress) == before
+
+
+# --- what a recovered job says about itself --------------------------------
+
+
+def test_an_interrupted_job_is_not_credited_with_the_time_nobody_was_watching(
+    tmp_path: Path,
+) -> None:
+    """Seen in the window: a job interrupted on one day and noticed on the next
+    reported a duration of 93 hours. The job did not run for 93 hours — that is
+    the gap until someone started VOLUM again. The last moment the job was
+    known to be alive is its own last progress entry."""
+    store = JobStore(tmp_path / "jobs")
+    record = JobRecord(model_id="triposr")
+    record.status = JobStatus.RECONSTRUCTING
+    record.started_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    record.progress = [
+        JobProgress(stage=JobStatus.RECONSTRUCTING, at=datetime(2026, 9, 1, 12, 0, 30, tzinfo=UTC))
+    ]
+    store.save(record)
+
+    recovered = store.recover_interrupted()
+
+    assert len(recovered) == 1
+    assert recovered[0].finished_at == datetime(2026, 9, 1, 12, 0, 30, tzinfo=UTC)
+    assert recovered[0].duration_seconds == 30
+
+
+def test_a_job_interrupted_before_any_progress_falls_back_to_its_start(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs")
+    record = JobRecord(model_id="triposr")
+    record.status = JobStatus.PREPROCESSING
+    record.started_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    store.save(record)
+
+    recovered = store.recover_interrupted()
+
+    assert recovered[0].finished_at == record.started_at
+    assert recovered[0].duration_seconds == 0
+
+
+def test_a_job_that_never_started_still_gets_a_finish_time(tmp_path: Path) -> None:
+    """It has to be terminal, and a terminal record without a finish time would
+    read as still running everywhere that checks."""
+    store = JobStore(tmp_path / "jobs")
+    store.save(JobRecord(model_id="triposr"))
+
+    recovered = store.recover_interrupted()
+
+    assert recovered[0].finished_at is not None
