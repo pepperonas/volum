@@ -19,6 +19,11 @@ from volum_core.jobs import JobManager, JobStatus, JobStore
 from volum_core.models.registry import TRIPOSR
 from volum_core.pipeline import PipelineResult, read_asset_metadata, run_pipeline
 from volum_core.pipeline import run as run_module
+from volum_core.preprocess import (
+    BackgroundOutcome,
+    BackgroundRemoval,
+    BackgroundRemovalError,
+)
 from volum_core.providers.types import (
     EnvironmentReport,
     GenerationRequest,
@@ -369,3 +374,90 @@ def test_a_cancel_landing_during_validation_still_ends_cancelled(
 
     assert result.job.status is JobStatus.CANCELLED
     assert "mesh" not in result.job.artifacts
+
+
+# --- the preprocessing stage ---------------------------------------------
+
+
+class RecordingProvider(FakeProvider):
+    """Remembers which images it was actually handed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[Path] = []
+
+    def generate(
+        self, request: GenerationRequest, on_progress: ProgressCallback
+    ) -> GenerationResult:
+        self.seen = list(request.images)
+        return super().generate(request, on_progress)
+
+
+def test_the_generator_gets_the_cutout_while_the_metadata_keeps_the_original(
+    manager: JobManager, tmp_path: Path
+) -> None:
+    """Two different questions, two different answers.
+
+    The generator must reconstruct from the cut-out. The asset must record the
+    file the *user* chose, because that is what a re-run starts from and what
+    the input hash was taken over.
+    """
+    provider = RecordingProvider()
+    cutout = tmp_path / "cut.png"
+    cutout.write_bytes(b"cut")
+
+    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
+        return [cutout], BackgroundRemoval(
+            outcome=BackgroundOutcome.REMOVED, note="done", coverage=0.3
+        )
+
+    result = _run(manager, provider, tmp_path, preprocessor=preprocessor)
+
+    assert provider.seen == [cutout]
+    assert result.metadata is not None
+    assert result.metadata.source_images == [str(tmp_path / "in.png")]
+    assert result.metadata.background_removal is not None
+    assert result.metadata.background_removal.outcome is BackgroundOutcome.REMOVED
+
+
+def test_a_preprocessor_that_fails_does_not_fail_the_job(
+    manager: JobManager, tmp_path: Path
+) -> None:
+    """An image with its background is still a legitimate input."""
+    provider = RecordingProvider()
+
+    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
+        raise BackgroundRemovalError("The model could not be loaded.")
+
+    result = _run(manager, provider, tmp_path, preprocessor=preprocessor)
+
+    assert result.job.status is JobStatus.COMPLETED
+    assert provider.seen == [tmp_path / "in.png"], "the original must be used"
+    assert result.metadata is not None
+    removal = result.metadata.background_removal
+    assert removal is not None
+    assert removal.outcome is BackgroundOutcome.FAILED
+    # The reason reaches the asset rather than only a log.
+    assert "could not be loaded" in removal.note
+
+
+def test_without_a_preprocessor_nothing_is_claimed_about_the_background(
+    manager: JobManager, tmp_path: Path
+) -> None:
+    """Absent, not "not done": a result made before the stage existed says nothing."""
+    result = _run(manager, FakeProvider(), tmp_path)
+    assert result.metadata is not None
+    assert result.metadata.background_removal is None
+
+
+def test_the_preprocessing_note_reaches_the_job_progress(
+    manager: JobManager, tmp_path: Path
+) -> None:
+    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
+        return images, BackgroundRemoval(
+            outcome=BackgroundOutcome.NOT_INSTALLED, note="Background removal is not installed."
+        )
+
+    result = _run(manager, FakeProvider(), tmp_path, preprocessor=preprocessor)
+    messages = [entry.message for entry in result.job.progress]
+    assert any("not installed" in message for message in messages)

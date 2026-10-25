@@ -41,7 +41,13 @@ from .inputs import InputError, stage_inputs
 from .jobs import JobError, JobManager, JobRecord, JobStore
 from .models import InstallState, ModelInstallError, ModelManager
 from .models.registry import all_models, get_model
-from .pipeline import PipelineResult, run_pipeline
+from .pipeline import PipelineResult, Preprocessor, run_pipeline
+from .preprocess import (
+    SEGMENTER_ID,
+    BackgroundRemoval,
+    remove_background,
+    segmenter_available,
+)
 from .providers.factory import available_provider_ids, create_provider
 from .providers.gating import Assessment, assess
 from .providers.types import Capability, ImageTo3DProvider, ProviderMetadata
@@ -96,6 +102,9 @@ class JobRequest(BaseModel):
     single_part: bool = False
     #: ``mps``, ``cuda`` or ``cpu``. ``None`` takes the doctor's recommendation.
     device: str | None = None
+    #: ``None`` follows the setting. Explicit here so a caller can override one
+    #: job without changing what every later job does.
+    remove_background: bool | None = None
 
 
 class JobSubmission(BaseModel):
@@ -138,6 +147,11 @@ class SettingsView(BaseModel):
     data_dir_is_default: bool
     hugging_face_token_set: bool
     allow_marginal_models: bool
+    remove_background: bool
+    #: Whether the segmenter is on disk. The setting can be on while this is
+    #: false, which is exactly the state a user needs to see: asked for, not
+    #: happening.
+    background_remover_installed: bool
 
 
 InstallListener = Callable[[InstallTask], None]
@@ -211,6 +225,8 @@ class VolumService:
             data_dir_is_default=self.data_dir == default_data_dir(),
             hugging_face_token_set=bool(self._settings.hugging_face_token),
             allow_marginal_models=self._settings.allow_marginal_models,
+            remove_background=self._settings.remove_background,
+            background_remover_installed=segmenter_available(self.models),
         )
 
     def update_settings(
@@ -219,6 +235,7 @@ class VolumService:
         hugging_face_token: str | None = None,
         clear_hugging_face_token: bool = False,
         allow_marginal_models: bool | None = None,
+        remove_background: bool | None = None,
         data_dir: Path | None = None,
     ) -> SettingsView:
         """Persist changed settings. A new data directory applies at next start."""
@@ -229,6 +246,8 @@ class VolumService:
             update["hugging_face_token"] = hugging_face_token
         if allow_marginal_models is not None:
             update["allow_marginal_models"] = allow_marginal_models
+        if remove_background is not None:
+            update["remove_background"] = remove_background
         if data_dir is not None:
             update["data_dir"] = data_dir
         self._settings = self._settings.model_copy(update=update)
@@ -403,6 +422,19 @@ class VolumService:
         except UnknownFormatError as error:
             raise ServiceError("invalid", str(error)) from error
 
+        wants_cutout = (
+            self._settings.remove_background
+            if request.remove_background is None
+            else request.remove_background
+        )
+        if wants_cutout and not segmenter_available(self.models):
+            # Asked for and unavailable is worth hearing at submission, not only
+            # as a note on the finished asset.
+            warnings.append(
+                "Background removal is not installed, so the background will become "
+                f"part of the model. Install it with: volum models install {SEGMENTER_ID}"
+            )
+
         if len(request.images) > 1 and Capability.MULTI_IMAGE not in metadata.capabilities:
             # Said out loud, not quietly done: using the first image silently
             # would be the simulated multi-image support the spec forbids.
@@ -421,6 +453,7 @@ class VolumService:
             export_formats=[fmt.value for fmt in export_options.formats],
             target_size_mm=export_options.target_size_mm,
             single_part=request.single_part,
+            remove_background=wants_cutout,
         )
         try:
             staged = stage_inputs(request.images, self.jobs_dir / record.id / "input")
@@ -491,12 +524,32 @@ class VolumService:
                 seed=record.seed,
                 export=export_options,
                 drop_loose_parts=record.single_part,
+                preprocessor=self._preprocessor(record),
                 on_stage=on_stage,
             )
         finally:
             with self._lock:
                 self._running.pop(job_id, None)
                 self._futures.pop(job_id, None)
+
+    def _preprocessor(self, record: JobRecord) -> Preprocessor | None:
+        """The preprocessing this record asked for, or nothing to do.
+
+        ``None`` when the job did not want a cut-out, so the pipeline does not
+        enter a stage with nothing to report. Availability is deliberately *not*
+        checked here: an uninstalled segmenter is a fact the asset should carry,
+        and ``remove_background`` says exactly that in the note it returns.
+        """
+        if not record.remove_background:
+            return None
+
+        def prepare(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
+            # Single-image throughout: the first image is what every current
+            # provider uses, and prepare_job has already said so out loud.
+            cutout, report = remove_background(images[0], output_dir, self.models)
+            return [cutout, *images[1:]], report
+
+        return prepare
 
     def cancel_job(self, job_id: str) -> JobRecord | None:
         """Mark the job cancelled and stop its worker. ``None`` if unknown."""

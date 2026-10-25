@@ -37,7 +37,7 @@ _TERMINATE_GRACE_S = 5.0
 _NOT_INHERITED = ("PYTHONDONTWRITEBYTECODE",)
 
 
-def _worker_environment() -> dict[str, str]:
+def worker_environment() -> dict[str, str]:
     """This process's environment, minus what a worker must not inherit."""
     return {key: value for key, value in os.environ.items() if key not in _NOT_INHERITED}
 
@@ -109,7 +109,7 @@ class WorkerProcess:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                env=_worker_environment(),
+                env=worker_environment(),
             )
             process = self._process
 

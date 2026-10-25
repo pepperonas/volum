@@ -108,6 +108,7 @@ class JobManager:
         export_formats: Iterable[str] = ("glb",),
         target_size_mm: float | None = None,
         single_part: bool = False,
+        remove_background: bool = True,
     ) -> JobRecord:
         record = JobRecord(
             model_id=model_id,
@@ -121,6 +122,7 @@ class JobManager:
             export_formats=list(export_formats),
             target_size_mm=target_size_mm,
             single_part=single_part,
+            remove_background=remove_background,
         )
         with self._lock:
             self._live[record.id] = record

@@ -25,6 +25,7 @@ from volum_core.models.manager import (
     ModelManager,
 )
 from volum_core.models.registry import TRIPOSR
+from volum_core.preprocess import BackgroundOutcome
 from volum_core.providers.types import (
     EnvironmentReport,
     GenerationRequest,
@@ -216,7 +217,17 @@ def test_prepare_warns_when_a_single_image_model_gets_several(
 
 def test_prepare_resolves_print_output(service: VolumService, image: Path) -> None:
     submission = service.prepare_job(
-        JobRequest(model_id="triposr", images=[image], for_print=True, target_size_mm=40)
+        JobRequest(
+            model_id="triposr",
+            images=[image],
+            for_print=True,
+            target_size_mm=40,
+            # Said explicitly because this test's point is that a fully specified
+            # print job has nothing to warn about. Leaving it to the setting would
+            # pull in the unrelated "no segmenter installed" warning and the
+            # assertion below would stop meaning what it says.
+            remove_background=False,
+        )
     )
     assert submission.job.export_formats == ["stl", "3mf"]
     assert submission.job.target_size_mm == 40
@@ -487,3 +498,67 @@ def test_settings_never_expose_the_token(service: VolumService) -> None:
     view = service.settings_view()
     assert view.hugging_face_token_set is True
     assert "hf_secret" not in view.model_dump_json()
+
+
+# --- the background-removal decision -------------------------------------
+
+
+def test_the_submission_records_the_decision_rather_than_reading_it_later(
+    service: VolumService, image: Path
+) -> None:
+    """A job queued today must run the way it was submitted.
+
+    Reading the setting at run time would silently change what a queued job
+    does when the setting is changed in between.
+    """
+    on = service.prepare_job(JobRequest(model_id="triposr", images=[image]))
+    off = service.prepare_job(
+        JobRequest(model_id="triposr", images=[image], remove_background=False)
+    )
+    assert on.job.remove_background is True
+    assert off.job.remove_background is False
+
+
+def test_asking_for_a_cutout_without_the_segmenter_warns_once_at_submission(
+    service: VolumService, image: Path
+) -> None:
+    submission = service.prepare_job(JobRequest(model_id="triposr", images=[image]))
+    assert any("Background removal is not installed" in w for w in submission.warnings)
+    assert any("volum models install birefnet" in w for w in submission.warnings)
+
+
+def test_declining_a_cutout_says_nothing_about_the_segmenter(
+    service: VolumService, image: Path
+) -> None:
+    submission = service.prepare_job(
+        JobRequest(model_id="triposr", images=[image], remove_background=False)
+    )
+    assert not any("Background removal" in w for w in submission.warnings)
+
+
+def test_a_job_that_declined_a_cutout_gets_no_preprocessing_stage(
+    service: VolumService, image: Path
+) -> None:
+    """``None`` rather than a no-op: the pipeline must not enter a stage with
+    nothing to report."""
+    record = service.prepare_job(
+        JobRequest(model_id="triposr", images=[image], remove_background=False)
+    ).job
+    assert service._preprocessor(record) is None
+
+
+def test_a_job_that_wanted_a_cutout_gets_one_even_when_it_is_not_installed(
+    service: VolumService, image: Path
+) -> None:
+    """Availability is decided in the stage, not here.
+
+    An uninstalled segmenter is a fact the asset should carry, and it can only
+    get there if the stage runs and reports it.
+    """
+    record = service.prepare_job(JobRequest(model_id="triposr", images=[image])).job
+    preprocessor = service._preprocessor(record)
+    assert preprocessor is not None
+
+    used, report = preprocessor([image], record.input_files[0].parent)
+    assert used == [image]
+    assert report.outcome is BackgroundOutcome.NOT_INSTALLED

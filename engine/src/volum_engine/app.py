@@ -73,6 +73,7 @@ class SettingsPatch(BaseModel):
     hugging_face_token: str | None = None
     clear_hugging_face_token: bool = False
     allow_marginal_models: bool | None = None
+    remove_background: bool | None = None
     data_dir: Path | None = None
 
 
@@ -159,6 +160,7 @@ def create_app(service: VolumService, *, token: str) -> FastAPI:
             hugging_face_token=body.hugging_face_token,
             clear_hugging_face_token=body.clear_hugging_face_token,
             allow_marginal_models=body.allow_marginal_models,
+            remove_background=body.remove_background,
             data_dir=body.data_dir,
         )
 

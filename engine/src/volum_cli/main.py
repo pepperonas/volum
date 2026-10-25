@@ -23,6 +23,7 @@ from volum_core.models import (
     all_models,
     get_model,
 )
+from volum_core.models.tools import all_tools
 from volum_core.pipeline import PipelineResult
 from volum_core.providers import Verdict
 from volum_core.providers.types import CommercialUse, ProviderMetadata
@@ -122,6 +123,30 @@ def models_list(as_json: Annotated[bool, _json_option()] = False) -> None:
         verdict = by_id[metadata.id].verdict
         entries.append((metadata, verdict.value, _VERDICT_COLOUR[verdict]))
     render_models(entries, console)
+    _show_tools()
+
+
+def _show_tools() -> None:
+    """The installable components that are not generators.
+
+    Listed apart from the models rather than among them: nothing here produces a
+    mesh, and a row in the model table would say it could. Shown even when
+    nothing is installed, because an absent background remover is the single
+    most likely reason a printable model comes out wrong.
+    """
+    manager = _manager()
+    console.print()
+    console.print("[bold]Preprocessing[/bold]  [dim](not generators)[/dim]")
+    for tool in all_tools():
+        installed = manager.state(tool.id) is InstallState.INSTALLED
+        state = "[green]installed[/green]" if installed else "[yellow]not installed[/yellow]"
+        console.print(
+            f"  {tool.id:<14} {state:<30} {tool.disk_bytes / 1024**2:.0f} MB  "
+            f"{tool.license.weights_license}"
+        )
+        console.print(f"    [dim]{tool.description}[/dim]")
+        if not installed:
+            console.print(f"    [dim]Install with: volum models install {tool.id}[/dim]")
 
 
 def _show_requirements(metadata: ProviderMetadata) -> None:
@@ -422,6 +447,14 @@ def generate(
             "are otherwise exported at the model's own arbitrary scale.",
         ),
     ] = None,
+    remove_background: Annotated[
+        bool | None,
+        typer.Option(
+            "--remove-background/--no-remove-background",
+            help="Cut the subject out before reconstruction. Follows the setting by "
+            "default. An image that already has transparency is never re-cut.",
+        ),
+    ] = None,
 ) -> None:
     """Generate a 3D asset from one or more images. Runs entirely on this machine."""
     request = JobRequest(
@@ -434,6 +467,7 @@ def generate(
         target_size_mm=size_mm,
         single_part=single_part,
         device=device,
+        remove_background=remove_background,
     )
     service = VolumService()
     try:

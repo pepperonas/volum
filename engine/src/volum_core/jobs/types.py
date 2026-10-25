@@ -121,6 +121,10 @@ class JobRecord(BaseModel):
     export_formats: list[str] = Field(default_factory=lambda: ["glb"])
     target_size_mm: float | None = None
     single_part: bool = False
+    #: Whether to cut the subject out before reconstruction. Kept on the record
+    #: rather than read from settings at run time: a job queued yesterday must
+    #: run the way it was submitted, not the way the settings read today.
+    remove_background: bool = True
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None

@@ -133,6 +133,9 @@ module = [
     "mlx.*",
     "mcubes.*",
     "numpy.*",
+    # ONNX Runtime lives in the segmenter's own virtualenv, same as torch does
+    # in a provider's: the engine must stay free of the ML stack.
+    "onnxruntime.*",
     "huggingface_hub.*",
     "PIL.*",
     "manifold3d.*",

@@ -400,8 +400,41 @@ TRELLIS2_INSTALL = InstallSpec(
 )
 
 
+BIREFNET_INSTALL = InstallSpec(
+    model_id="birefnet",
+    # Nothing here needs a newer interpreter, and the oldest one VOLUM supports is
+    # the one most likely to have wheels for every platform.
+    python_version="3.11",
+    pip_packages=(
+        # CPU only, and deliberately: a GPU build would contend with the generator
+        # for the same unified memory moments before the generator needs all of
+        # it, on a machine where the generator is already the tight fit.
+        "onnxruntime",
+        "pillow",
+        "numpy",
+    ),
+    weights=(
+        WeightSpec(
+            repo_id="onnx-community/BiRefNet_lite-ONNX",
+            # Commit-pinned like every other weight in VOLUM: a moving revision
+            # would change the silhouette of every future model without a trace.
+            # Verified 2026-10-25.
+            revision="de15b22ba131738a16dff04aab8bdf8dc32e3ac1",
+            # preprocessor_config.json is fetched because it *documents* the
+            # normalisation the worker applies. The worker does not read it at run
+            # time — a mismatch should be a failing test, not a silent reinterpretation
+            # of the input — but shipping it keeps the source of those numbers on disk.
+            files=("onnx/model.onnx", "config.json", "preprocessor_config.json"),
+            gated=False,
+            size_bytes=224_000_000,
+            license_note="MIT (ZhengPeng7/BiRefNet_lite, re-exported to ONNX)",
+        ),
+    ),
+)
+
+
 INSTALL_SPECS: dict[str, InstallSpec] = {
-    spec.model_id: spec for spec in (TRIPOSR_INSTALL, TRELLIS2_INSTALL)
+    spec.model_id: spec for spec in (TRIPOSR_INSTALL, TRELLIS2_INSTALL, BIREFNET_INSTALL)
 }
 
 

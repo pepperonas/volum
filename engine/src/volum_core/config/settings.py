@@ -33,6 +33,12 @@ class Settings(BaseModel):
         description="Permit models whose estimated peak memory exceeds this machine's. "
         "Off by default: the honest default is to not attempt them.",
     )
+    remove_background: bool = Field(
+        default=True,
+        description="Cut the subject out of the image before reconstruction. On by "
+        "default because every generator here reconstructs what it is shown, so a "
+        "background becomes geometry. Has no effect until the segmenter is installed.",
+    )
 
     def resolved_data_dir(self) -> Path:
         """The data directory actually in use.

@@ -22,6 +22,7 @@ from ..hardware.detect import detect_hardware
 from ..providers.gating import Verdict, assess
 from .install_spec import InstallSpec, get_install_spec
 from .registry import get_model
+from .tools import get_tool
 
 MANIFEST_FILE = "install.json"
 
@@ -263,7 +264,19 @@ class ModelManager:
         """Refuse impossible installs before touching the disk or the network."""
         metadata = get_model(model_id)
         if metadata is None:
-            raise ModelInstallError(f"Unknown model '{model_id}'.")
+            tool = get_tool(model_id)
+            if tool is None:
+                raise ModelInstallError(f"Unknown model '{model_id}'.")
+            # A tool is not hardware-gated, and that is a fact about these tools
+            # rather than a shortcut: the one that exists runs ONNX Runtime on the
+            # CPU, so it runs wherever VOLUM runs. Disk is still a real limit.
+            self._require_disk(tool.disk_bytes, tool.name)
+            if get_install_spec(model_id) is None:
+                raise ModelInstallError(
+                    f"{tool.name} has no installer yet.",
+                    technical=f"No InstallSpec registered for {model_id}.",
+                )
+            return
         if get_install_spec(model_id) is None:
             raise ModelInstallError(
                 f"{metadata.name} has no installer yet.",
@@ -288,11 +301,16 @@ class ModelManager:
                 ],
             )
 
-        needed = metadata.requirements.disk_bytes + _DISK_HEADROOM_BYTES
+        self._require_disk(metadata.requirements.disk_bytes, metadata.name)
+
+    def _require_disk(self, disk_bytes: int, name: str) -> None:
+        """Refuse an install that cannot fit, with the two numbers that decided it."""
+        hardware = detect_hardware(data_dir=self.root)
+        needed = disk_bytes + _DISK_HEADROOM_BYTES
         if hardware.disk_free_bytes is not None and hardware.disk_free_bytes < needed:
             raise ModelInstallError(
-                f"Not enough disk space: {needed / 1024**3:.0f} GB needed, "
-                f"{hardware.disk_free_bytes / 1024**3:.0f} GB free.",
+                f"Not enough disk space for {name}: {needed / 1024**3:.1f} GB needed, "
+                f"{hardware.disk_free_bytes / 1024**3:.1f} GB free.",
                 suggestions=["Free up space.", "Move the VOLUM data directory to another volume."],
             )
 
