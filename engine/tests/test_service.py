@@ -622,3 +622,26 @@ def test_analyse_images_without_any_image_is_refused(service: VolumService) -> N
     with pytest.raises(ServiceError) as raised:
         service.analyse_images([])
     assert raised.value.kind == "invalid"
+
+
+def test_a_multi_image_model_receives_every_frame(service: VolumService, tmp_path: Path) -> None:
+    """The branch that protects a provider no catalogue entry declares yet.
+
+    Nothing in VOLUM sets ``MULTI_IMAGE``, so this path is unreachable in
+    practice — which is exactly why it is worth pinning. A model that genuinely
+    conditions on several views must receive all of them; cutting one out and
+    dropping the rest would be a silent loss, and the loss would look like a
+    quality problem in the model rather than a bug here.
+    """
+    first = make_png(tmp_path / "a.png")
+    second = make_png(tmp_path / "b.png")
+    record = service.prepare_job(JobRequest(model_id="triposr", images=[first, second])).job
+    record.select_frame = False
+
+    preprocessor = service._preprocessor(record)
+    assert preprocessor is not None
+
+    prepared = preprocessor([first, second], tmp_path / "out")
+    assert prepared.images == [first, second]
+    assert prepared.frames is None
+    assert prepared.background is None, "no frame was singled out, so none was cut out"
