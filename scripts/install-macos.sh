@@ -70,7 +70,14 @@ if [ "$DO_BUILD" -eq 1 ]; then
     python3 "$ROOT/scripts/build_runtime.py"
   else
     step "Checking the engine runtime"
-    python3 "$ROOT/scripts/build_runtime.py" --check
+    # A failed check means stale, and a rebuild is the fix — whether the engine
+    # gained a dependency the runtime does not have, or the tree was damaged.
+    # Dying here instead would leave the previous runtime inside the next
+    # bundle, which is how an application ships with code it cannot run.
+    if ! python3 "$ROOT/scripts/build_runtime.py" --check; then
+      step "The runtime is out of date — rebuilding it"
+      python3 "$ROOT/scripts/build_runtime.py"
+    fi
   fi
 
   step "Building the application"

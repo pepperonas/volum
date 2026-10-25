@@ -19,6 +19,7 @@ megabytes of third-party binaries built from pinned inputs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -235,6 +236,44 @@ def directory_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
+#: What the runtime was built from, written beside the interpreter.
+#:
+#: The import probe below can only test the modules someone remembered to list,
+#: and that list will always lag behind the dependency list — Pillow became a
+#: dependency and the probe went on passing against a runtime that did not have
+#: it, which would have shipped an application whose image analysis could not
+#: run. Recording the lock file's digest makes *any* dependency change mark the
+#: runtime stale, without anyone having to notice.
+LOCK_MARKER = "volum-runtime-lock.txt"
+
+
+def lock_digest() -> str:
+    lock = ENGINE / "uv.lock"
+    if not lock.exists():
+        raise BuildError(f"no lock file at {lock}")
+    return hashlib.sha256(lock.read_bytes()).hexdigest()
+
+
+def record_lock(tree: Path) -> None:
+    (tree / LOCK_MARKER).write_text(lock_digest() + "\n", encoding="utf-8")
+
+
+def check_lock(tree: Path) -> None:
+    marker = tree / LOCK_MARKER
+    current = lock_digest()
+    if not marker.exists():
+        raise BuildError(
+            f"the runtime predates dependency tracking ({LOCK_MARKER} is missing); rebuild it"
+        )
+    recorded = marker.read_text(encoding="utf-8").strip()
+    if recorded != current:
+        raise BuildError(
+            "the runtime was built from a different engine/uv.lock; rebuild it\n"
+            f"  built from {recorded[:16]}\n"
+            f"  now        {current[:16]}"
+        )
+
+
 def verify(tree: Path) -> dict[str, str]:
     """Prove the built runtime actually works.
 
@@ -260,12 +299,21 @@ def verify(tree: Path) -> dict[str, str]:
             "manifold3d, mcubes, fastapi, uvicorn;"
             "from volum_core.hardware import run_doctor;"
             "from volum_engine.app import create_app;"
+            # Pillow is exercised rather than imported: it carries compiled
+            # extensions, frame measurement in the packaged engine depends on
+            # them, and an import alone does not prove `_imaging` survived the
+            # stripping above.
+            "from PIL import Image;"
+            "probe = Image.new('RGB', (9, 8)).resize((4, 4), Image.Resampling.LANCZOS);"
             "r = run_doctor(deep=False);"
-            'print(json.dumps({"version": r.volum_version, "runtime": r.recommended_runtime}))',
+            'print(json.dumps({"version": r.volum_version, "runtime": r.recommended_runtime,'
+            ' "pillow": probe.size == (4, 4)}))',
         ],
         env=quiet,
     )
     report = json.loads(imports.stdout.strip().splitlines()[-1])
+    if not report.get("pillow"):
+        raise BuildError("Pillow does not work in the built runtime")
 
     # Without a token the engine must refuse to start. That it refuses for this
     # reason proves the entry point is reachable and its checks are intact.
@@ -321,6 +369,8 @@ def build(*, do_strip: bool) -> None:
         freed = strip(RUNTIME)
         print(f"stripped    {freed / 1e6:.0f} MB")
 
+    record_lock(RUNTIME)
+
     precompile(RUNTIME)
     print(f"compiled    hash-based bytecode ({directory_size(RUNTIME) / 1e6:.0f} MB)")
 
@@ -362,6 +412,7 @@ def main() -> int:
         if args.check:
             if not RUNTIME.exists():
                 raise BuildError(f"nothing built at {RUNTIME}")
+            check_lock(RUNTIME)
             checked = verify(RUNTIME)
             print(f"ok: VOLUM {checked['volum_version']}, {checked['uv']}")
         else:

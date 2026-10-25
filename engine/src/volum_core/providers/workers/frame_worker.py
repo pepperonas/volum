@@ -128,6 +128,11 @@ def fingerprint(image: Any) -> str:
     an image against its blurred, half-scale, quarter-scale, brightened, 5%
     cropped and JPEG-40 self differs by at most 5 bits of 64, while 91 pairs of
     *different* images differ by at least 15.
+
+    Note that the caller hands this the **upright** image, which makes the same
+    photograph stored rotated come back as near-identical to its upright twin —
+    measured, and right: they are the same frame. A 90-degree rotation of
+    *different* content still measures 24-36 bits away.
     """
     from PIL import Image
 

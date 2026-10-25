@@ -137,6 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Invisible in development by construction: Tauri injects the policy as a header on its
   own protocol, so it applies only once installed. Pinned as a contract — if anything in
   the window makes a blob URL, the effective `connect-src` has to allow `blob:`.
+- **The bundled runtime could go stale without anything noticing.** Its verification
+  imported a hand-written list of modules, which always lags the dependency list: when
+  Pillow became a core dependency the check kept passing against a runtime that did not
+  have it, so the installed application carried image-analysis code it could not run. The
+  build now records the lock file's digest beside the interpreter, `--check` compares it,
+  and the installer rebuilds on a failed check rather than shipping the old runtime.
 - **The packaged application broke its own code signature on first run.** The bundled
   interpreter wrote bytecode into its sealed `Contents/Resources` — 1,280 complaints from
   `codesign --verify`, 60 files added and 1,219 rewritten, every one a `.pyc`. Two causes

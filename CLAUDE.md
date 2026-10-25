@@ -270,6 +270,12 @@ a service test once saved a fake Hugging Face token into the developer's real
   sealed. Verify the **installed** copy, not just the built one — that is where the
   bytecode defect lived.
 - **Copy an app bundle with `ditto`, not `cp -R`.**
+- **The bundled runtime goes stale when engine dependencies change, and an import probe
+  cannot see it.** When Pillow became a core dependency, `build_runtime.py --check` kept
+  passing against a runtime without it — the installed application carried frame-analysis
+  code it could not run. The build now records the SHA-256 of `engine/uv.lock` beside the
+  interpreter and `--check` compares it; `install-macos.sh` rebuilds on a failed check
+  instead of stopping, because stopping leaves the old runtime in the next bundle.
 - **The window's CSP applies only once installed.** Tauri injects it as a header on its
   own protocol, so it is absent under `tauri dev`, where Vite serves the page over http.
   Every CSP mistake is therefore invisible in development and fatal after installing —

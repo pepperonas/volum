@@ -62,6 +62,23 @@ exists there because macOS keys TCC grants — Accessibility, Screen Recording �
 signature that an ad-hoc rebuild changes every time. VOLUM asks for no TCC permission at
 all, so there is no grant to preserve.
 
+### ⚠️ The runtime goes stale when the engine's dependencies change
+
+The runtime is built once and reused; `install-macos.sh` only re-checks it. That check
+used to import a hand-written list of modules, and such a list **always lags behind the
+dependency list**. When Pillow became a core dependency the probe went on passing against
+a runtime that did not have it, and the installed application carried image-analysis code
+it could not run — found only because the probe was extended at the same time.
+
+So the build now records the SHA-256 of `engine/uv.lock` as `volum-runtime-lock.txt`
+beside the interpreter, and `--check` fails when it no longer matches. Any dependency
+change marks the runtime stale without anyone having to notice. `install-macos.sh`
+**rebuilds** on a failed check rather than stopping: dying there would leave the previous
+runtime inside the next bundle, which is the failure this is meant to prevent.
+
+Pillow is also *exercised* rather than imported in the probe — it carries compiled
+extensions, and an import does not prove `_imaging` survived the stripping step.
+
 ### ⚠️ A sealed bundle must not be written to — including by itself
 
 The first run of an installed build broke its own code signature. `codesign --verify`
