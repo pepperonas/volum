@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { SseDecoder } from "./sse";
 import type {
   DoctorReport,
+  FrameSelection,
   InstallTask,
   JobRecord,
   JobRequest,
@@ -196,6 +197,18 @@ export const api = {
   removeModel: (id: string) => call<{ removed: boolean }>(`/api/models/${id}`, { method: "DELETE" }),
   installEvents: (id: string, onEvent: (task: InstallTask) => void, signal?: AbortSignal) =>
     stream<InstallTask>(`/api/models/${id}/install/events`, onEvent, signal),
+
+  /**
+   * Which of these images would be reconstructed, and why. Read only.
+   *
+   * Separate from creating a job because it is cheap — under a second against
+   * minutes — so the answer can be shown before anyone commits to a generation.
+   */
+  analyse: (images: string[]) =>
+    call<FrameSelection>("/api/images/analyse", {
+      method: "POST",
+      body: JSON.stringify({ images }),
+    }),
 
   jobs: (limit?: number) => call<JobRecord[]>(`/api/jobs${limit ? `?limit=${limit}` : ""}`),
   job: (id: string) => call<JobRecord>(`/api/jobs/${id}`),

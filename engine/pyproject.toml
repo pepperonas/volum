@@ -8,6 +8,10 @@ dynamic = ["version"]
 
 dependencies = [
     "pydantic>=2.7",
+    # Decoding the user's own images: frame measurement and the orientation fix
+    # need it, and both must work on a fresh install with nothing downloaded.
+    # MIT-CMU, read from the licence text on 2026-10-25.
+    "pillow>=10.3",
     "typer>=0.12",
     "rich>=13.7",
     "psutil>=5.9",

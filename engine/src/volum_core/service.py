@@ -37,15 +37,18 @@ from .export import UnknownFormatError, resolve_export_options
 from .hardware import DoctorReport, run_doctor
 from .hardware.detect import detect_hardware
 from .hardware.types import RuntimeKind
-from .inputs import InputError, stage_inputs
+from .inputs import InputError, stage_inputs, validate_image
 from .jobs import JobError, JobManager, JobRecord, JobStore
 from .models import InstallState, ModelInstallError, ModelManager
 from .models.registry import all_models, get_model
 from .models.tools import ToolMetadata, all_tools, get_tool
-from .pipeline import PipelineResult, Preprocessor, run_pipeline
+from .pipeline import PipelineResult, Preparation, Preprocessor, run_pipeline
 from .preprocess import (
     SEGMENTER_ID,
-    BackgroundRemoval,
+    FrameAnalysisError,
+    FrameSelection,
+    analyse_frames,
+    make_upright,
     remove_background,
     segmenter_available,
 )
@@ -427,6 +430,34 @@ class VolumService:
         records = (self.jobs.get(job_id) for job_id in self._running)
         return [record for record in records if record is not None]
 
+    # --- input analysis ---------------------------------------------------------
+
+    def analyse_images(self, images: list[Path]) -> FrameSelection:
+        """Measure a set of images and say which one would be reconstructed.
+
+        The same measurement a job runs, available before committing to one:
+        generation takes minutes and frame measurement takes under a second, so
+        a user with five photographs can see which one VOLUM would use and why
+        (spec section 15, ``docs/decision.md`` section 10).
+
+        Nothing is staged or copied — this only reads.
+        """
+        if not images:
+            raise ServiceError("invalid", "No image was given.")
+        try:
+            validated = [validate_image(path) for path in images]
+        except InputError as error:
+            raise ServiceError(
+                "invalid", error.message, technical=error.technical, suggestions=error.suggestions
+            ) from error
+        try:
+            return analyse_frames(
+                [info.path for info in validated],
+                names=[info.original_name for info in validated],
+            )
+        except FrameAnalysisError as error:
+            raise ServiceError("unavailable", error.message, technical=error.technical) from error
+
     # --- jobs -------------------------------------------------------------------
 
     def prepare_job(self, request: JobRequest) -> JobSubmission:
@@ -467,12 +498,14 @@ class VolumService:
                 f"part of the model. Install it with: volum models install {SEGMENTER_ID}"
             )
 
-        if len(request.images) > 1 and Capability.MULTI_IMAGE not in metadata.capabilities:
-            # Said out loud, not quietly done: using the first image silently
-            # would be the simulated multi-image support the spec forbids.
+        selects_frame = Capability.MULTI_IMAGE not in metadata.capabilities
+        if len(request.images) > 1 and selects_frame:
+            # Said out loud, not quietly done. Taking the first image silently
+            # would be the simulated multi-image support the spec forbids; so
+            # would calling this reconstruction from several views.
             warnings.append(
-                f"{metadata.name} uses a single image. The first of {len(request.images)} "
-                "will be used; the others are ignored."
+                f"{metadata.name} reconstructs from one image. All {len(request.images)} "
+                "will be measured and the best one used — they are not combined."
             )
 
         record = self.jobs.create(
@@ -486,6 +519,7 @@ class VolumService:
             target_size_mm=export_options.target_size_mm,
             single_part=request.single_part,
             remove_background=wants_cutout,
+            select_frame=selects_frame,
         )
         try:
             staged = stage_inputs(request.images, self.jobs_dir / record.id / "input")
@@ -567,19 +601,40 @@ class VolumService:
     def _preprocessor(self, record: JobRecord) -> Preprocessor | None:
         """The preprocessing this record asked for, or nothing to do.
 
-        ``None`` when the job did not want a cut-out, so the pipeline does not
-        enter a stage with nothing to report. Availability is deliberately *not*
-        checked here: an uninstalled segmenter is a fact the asset should carry,
-        and ``remove_background`` says exactly that in the note it returns.
+        Three steps, in this order because each depends on the one before:
+        measure the frames and choose one, correct its stored orientation, cut
+        its background out. Choosing first is what keeps the cost sane — the
+        segmenter takes 43 s per image, so running it on every candidate would
+        cost more than the generation.
+
+        Availability of the segmenter is deliberately *not* checked here: an
+        uninstalled segmenter is a fact the asset should carry, and
+        ``remove_background`` says exactly that in the note it returns.
         """
-        if not record.remove_background:
+        if not (record.select_frame or record.remove_background):
             return None
 
-        def prepare(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
-            # Single-image throughout: the first image is what every current
-            # provider uses, and prepare_job has already said so out loud.
-            cutout, report = remove_background(images[0], output_dir, self.models)
-            return [cutout, *images[1:]], report
+        def prepare(images: list[Path], output_dir: Path) -> Preparation:
+            frames: FrameSelection | None = None
+            chosen = images[0]
+            if record.select_frame:
+                frames = analyse_frames(images, names=list(record.input_names) or None)
+                chosen = images[frames.chosen_index]
+                if frames.frames[frames.chosen_index].needs_upright:
+                    # Nothing else in VOLUM applies the EXIF orientation tag, so
+                    # without this a photograph taken in portrait on a phone is
+                    # reconstructed lying on its side.
+                    chosen = make_upright(chosen, output_dir)
+            elif record.remove_background:
+                # A model that conditions on several views gets all of them.
+                # Cutting one out and dropping the rest would be a silent loss,
+                # and no provider in VOLUM declares that capability today.
+                return Preparation(images=images)
+
+            if not record.remove_background:
+                return Preparation(images=[chosen], frames=frames)
+            cutout, background = remove_background(chosen, output_dir, self.models)
+            return Preparation(images=[cutout], frames=frames, background=background)
 
         return prepare
 

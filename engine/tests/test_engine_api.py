@@ -15,9 +15,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from PIL import ImageFilter
 from pydantic import BaseModel
 
 from conftest import make_png
+from test_frames import textured
 from test_service import SlowFakeProvider, mark_installed
 from volum_core.jobs import JobStatus
 from volum_core.models.manager import InstallManifest
@@ -508,3 +510,45 @@ def test_the_settings_say_whether_the_background_remover_is_there(client: TestCl
     settings = client.get("/api/settings", headers=AUTH).json()
     assert settings["remove_background"] is True
     assert "background_remover_installed" in settings
+
+
+# --- input analysis --------------------------------------------------------
+
+
+def test_analyse_reports_which_frame_would_be_used(client: TestClient, tmp_path: Path) -> None:
+    """Available before committing to a generation, which is the point of it.
+
+    The images are textured on purpose: a flat PNG has no gradient energy and
+    would make the ranking meaningless.
+    """
+    sharp = tmp_path / "sharp.png"
+    soft = tmp_path / "soft.png"
+    base = textured()
+    base.save(sharp)
+    base.filter(ImageFilter.GaussianBlur(3)).save(soft)
+
+    response = client.post(
+        "/api/images/analyse", json={"images": [str(soft), str(sharp)]}, headers=AUTH
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chosen"] == "sharp.png"
+    assert body["chosen_index"] == 1
+    assert len(body["frames"]) == 2
+    assert "not combined" in body["note"]
+
+
+def test_analyse_refuses_something_that_is_not_an_image(client: TestClient, tmp_path: Path) -> None:
+    text = tmp_path / "notes.png"
+    text.write_text("this is not a png", encoding="utf-8")
+
+    response = client.post("/api/images/analyse", json={"images": [str(text)]}, headers=AUTH)
+
+    assert response.status_code == 400
+    assert "not a PNG" in response.json()["error"]["message"]
+
+
+def test_analyse_needs_the_token(client: TestClient, tmp_path: Path) -> None:
+    image = make_png(tmp_path / "a.png")
+    assert client.post("/api/images/analyse", json={"images": [str(image)]}).status_code == 401

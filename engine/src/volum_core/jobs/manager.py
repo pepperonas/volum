@@ -109,6 +109,7 @@ class JobManager:
         target_size_mm: float | None = None,
         single_part: bool = False,
         remove_background: bool = True,
+        select_frame: bool = True,
     ) -> JobRecord:
         record = JobRecord(
             model_id=model_id,
@@ -123,6 +124,7 @@ class JobManager:
             target_size_mm=target_size_mm,
             single_part=single_part,
             remove_background=remove_background,
+            select_frame=select_frame,
         )
         with self._lock:
             self._live[record.id] = record

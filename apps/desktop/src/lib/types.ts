@@ -175,6 +175,8 @@ export interface JobRecord {
   export_formats: string[];
   target_size_mm: number | null;
   single_part: boolean;
+  /** Whether the inputs are measured and the best one reconstructed. */
+  select_frame: boolean;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -195,6 +197,56 @@ export interface JobRequest {
   device?: string | null;
   /** `null` follows the setting. Explicit overrides one job, not every later one. */
   remove_background?: boolean | null;
+}
+
+/**
+ * One candidate frame, measured.
+ *
+ * `score` and `rank` are properties of the set, not of the image: the same
+ * photograph scores differently among different siblings. Everything above them
+ * is a measurement of the file alone.
+ */
+export interface FrameMeasurement {
+  name: string;
+  path: string;
+  /** Position in the submitted list — "frame 3 of 5". */
+  index: number;
+  width: number;
+  height: number;
+  stored_width: number;
+  stored_height: number;
+  size_bytes: number;
+  format: string;
+  /** Gradient energy at the size a model reads. Comparable within a set only. */
+  detail: number;
+  contrast: number;
+  highlight_clipping: number;
+  shadow_clipping: number;
+  /** Exact subject share when the image already carries a matte. Never estimated. */
+  alpha_coverage: number | null;
+  has_exif: boolean;
+  exif_orientation: number | null;
+  needs_upright: boolean;
+  fingerprint: string;
+  score: number;
+  rank: number;
+  near_identical_to: string | null;
+  notes: string[];
+  /** Set when this one frame could not be measured. The others still were. */
+  error: string | null;
+}
+
+/** Which frame was reconstructed, and why. */
+export interface FrameSelection {
+  outcome: "selected" | "only_one" | "failed";
+  /** Index into the submitted list — the only thing that says the rest were not used. */
+  chosen_index: number;
+  chosen: string;
+  reason: string;
+  note: string;
+  working_grid: number;
+  frames: FrameMeasurement[];
+  duration_seconds: number | null;
 }
 
 /** What the preprocessing stage did. Absent on assets made before it existed. */

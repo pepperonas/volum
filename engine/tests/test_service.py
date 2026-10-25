@@ -15,8 +15,10 @@ from pathlib import Path
 
 import pytest
 import trimesh
+from PIL import ImageFilter
 
 from conftest import make_png
+from test_frames import textured
 from volum_core.jobs import JobRecord, JobStatus
 from volum_core.models.manager import (
     MANIFEST_FILE,
@@ -25,7 +27,7 @@ from volum_core.models.manager import (
     ModelManager,
 )
 from volum_core.models.registry import TRIPOSR
-from volum_core.preprocess import BackgroundOutcome
+from volum_core.preprocess import BackgroundOutcome, FrameOutcome
 from volum_core.providers.types import (
     EnvironmentReport,
     GenerationRequest,
@@ -208,11 +210,19 @@ def test_prepare_refuses_a_bad_image_with_the_input_message(
 def test_prepare_warns_when_a_single_image_model_gets_several(
     service: VolumService, image: Path, tmp_path: Path
 ) -> None:
+    """The warning has to say what actually happens, which is selection.
+
+    "The first will be used" was the old behaviour and would now be a lie; so
+    would any wording that let the user believe the frames are merged.
+    """
     second = make_png(tmp_path / "second.png")
     submission = service.prepare_job(JobRequest(model_id="triposr", images=[image, second]))
-    assert any("single image" in w for w in submission.warnings)
+    warning = next(w for w in submission.warnings if "reconstructs from one image" in w)
+    assert "not combined" in warning
+    assert "best one" in warning
     # Both are still staged: the record says what the user gave, honestly.
     assert len(submission.job.input_files) == 2
+    assert submission.job.select_frame is True
 
 
 def test_prepare_resolves_print_output(service: VolumService, image: Path) -> None:
@@ -536,7 +546,27 @@ def test_declining_a_cutout_says_nothing_about_the_segmenter(
     assert not any("Background removal" in w for w in submission.warnings)
 
 
-def test_a_job_that_declined_a_cutout_gets_no_preprocessing_stage(
+def test_a_job_that_declined_a_cutout_is_still_measured(service: VolumService, image: Path) -> None:
+    """Declining the cut-out does not decline the input analysis.
+
+    The two are separate: one changes the geometry, the other only decides
+    which frame the geometry is made from, and recording what the input was is
+    worth doing either way (spec section 15).
+    """
+    record = service.prepare_job(
+        JobRequest(model_id="triposr", images=[image], remove_background=False)
+    ).job
+    preprocessor = service._preprocessor(record)
+    assert preprocessor is not None
+
+    prepared = preprocessor([image], record.input_files[0].parent)
+    assert prepared.background is None, "no cut-out was asked for"
+    assert prepared.frames is not None
+    assert prepared.frames.outcome is FrameOutcome.ONLY_ONE
+    assert prepared.images == [image]
+
+
+def test_a_job_with_nothing_to_prepare_gets_no_preprocessing_stage(
     service: VolumService, image: Path
 ) -> None:
     """``None`` rather than a no-op: the pipeline must not enter a stage with
@@ -544,6 +574,9 @@ def test_a_job_that_declined_a_cutout_gets_no_preprocessing_stage(
     record = service.prepare_job(
         JobRequest(model_id="triposr", images=[image], remove_background=False)
     ).job
+    # What a provider declaring MULTI_IMAGE would produce: all frames go to the
+    # model, so there is nothing to choose and, here, nothing to cut out either.
+    record.select_frame = False
     assert service._preprocessor(record) is None
 
 
@@ -559,6 +592,33 @@ def test_a_job_that_wanted_a_cutout_gets_one_even_when_it_is_not_installed(
     preprocessor = service._preprocessor(record)
     assert preprocessor is not None
 
-    used, report = preprocessor([image], record.input_files[0].parent)
-    assert used == [image]
-    assert report.outcome is BackgroundOutcome.NOT_INSTALLED
+    prepared = preprocessor([image], record.input_files[0].parent)
+    assert prepared.images == [image]
+    assert prepared.background is not None
+    assert prepared.background.outcome is BackgroundOutcome.NOT_INSTALLED
+
+
+# --- input analysis --------------------------------------------------------
+
+
+def test_analyse_images_measures_without_staging_anything(
+    service: VolumService, tmp_path: Path
+) -> None:
+    """A question, not a job: nothing is copied into the data directory."""
+    sharp = tmp_path / "sharp.png"
+    soft = tmp_path / "soft.png"
+    base = textured()
+    base.save(sharp)
+    base.filter(ImageFilter.GaussianBlur(3)).save(soft)
+
+    before = sorted(p.name for p in service.jobs_dir.rglob("*"))
+    selection = service.analyse_images([soft, sharp])
+
+    assert selection.chosen == "sharp.png"
+    assert sorted(p.name for p in service.jobs_dir.rglob("*")) == before
+
+
+def test_analyse_images_without_any_image_is_refused(service: VolumService) -> None:
+    with pytest.raises(ServiceError) as raised:
+        service.analyse_images([])
+    assert raised.value.kind == "invalid"

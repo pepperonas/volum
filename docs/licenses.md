@@ -175,6 +175,32 @@ RMBG-2.0 by default, which is the non-commercial entry directly above.
 card. The tag is a declaration rather than a text, which is why the upstream licence was
 read as well — and why the chain is recorded as two rows rather than one.
 
+### `Pillow` ✅ MIT-CMU — **shipped, a direct dependency**
+
+| Field | Value |
+|---|---|
+| Licence | MIT-CMU (the "open source MIT-CMU License" named in its own text) |
+| Read from | `pillow-13.0.0.dist-info/licenses/LICENSE` and `License-Expression: MIT-CMU` in its metadata, 2026-10-25 |
+| Used for | Decoding the user's own images: frame measurement and the EXIF orientation fix |
+| Commercial use | **allowed**, no conditions, no territorial restriction |
+
+Named here because it moved from an optional extra to a **core dependency** when frame
+selection was built, and a dependency that ships inside the application bundle is one
+whose licence has to be read rather than assumed. The permission is broad — *"to use,
+copy, modify and distribute this software and its documentation for any purpose and
+without fee"* — with the usual attribution and no-endorsement conditions.
+
+⚠️ The `LICENSE` file bundles the licences of **22 vendored C libraries** after Pillow's
+own, under `----` separators: AOM, BROTLI, BZIP2, DAV1D, FREETYPE2, HARFBUZZ, LCMS2,
+LIBAVIF, LIBJPEG, LIBLZMA, LIBPNG, LIBTIFF, LIBWEBP, LIBYUV, OPENJPEG, RAQM, TCL_TK, XAU,
+XCB, XDMCP, ZLIB, ZSTD. Reading the first paragraphs is right for Pillow itself, and the
+MIT-CMU grant above is what covers VOLUM's use of the library.
+
+**The 22 are `UNKNOWN` here** — they have not been read, and they are not all the same
+licence (FREETYPE2 alone is dual-licensed). They ship inside the wheel that ships inside
+the application bundle, so a redistribution audit has to read them; nothing in this entry
+should be taken as having done that.
+
 ### `DINOv3` — Meta ⚠️ usable, gated
 
 | Field | Value |

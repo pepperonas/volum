@@ -12,6 +12,7 @@ from typing import Annotated, cast
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from volum_core.config import get_data_dir, load_settings
 from volum_core.hardware import run_doctor
@@ -25,6 +26,7 @@ from volum_core.models import (
 )
 from volum_core.models.tools import all_tools
 from volum_core.pipeline import PipelineResult
+from volum_core.preprocess import FrameOutcome, FrameSelection
 from volum_core.providers import Verdict
 from volum_core.providers.types import CommercialUse, ProviderMetadata
 from volum_core.service import JobRequest, ServiceError, VolumService
@@ -399,6 +401,69 @@ def _generate(service: VolumService, request: JobRequest, output: Path | None) -
             output_dir=output,
             on_stage=lambda stage: status.update(f"[cyan]{stage}[/cyan]..."),
         )
+
+
+def _render_frames(selection: FrameSelection) -> None:
+    """The measurements, and which frame they point at."""
+    if selection.outcome is not FrameOutcome.ONLY_ONE:
+        console.print(f"[green]{selection.chosen}[/green] — {selection.reason}\n")
+
+    table = Table(box=None, pad_edge=False)
+    table.add_column("")
+    table.add_column("frame")
+    table.add_column("score", justify="right")
+    table.add_column("detail", justify="right")
+    table.add_column("blown", justify="right")
+    table.add_column("pixels", justify="right")
+    table.add_column("notes")
+
+    for frame in sorted(selection.frames, key=lambda f: (f.rank or 99, f.index)):
+        if frame.error is not None:
+            table.add_row("", frame.name, "—", "—", "—", "—", f"[red]{frame.error}[/red]")
+            continue
+        marker = "[green]▸[/green]" if frame.index == selection.chosen_index else " "
+        notes = list(frame.notes)
+        if frame.near_identical_to is not None:
+            notes.append(f"Near-identical to {frame.near_identical_to}.")
+        table.add_row(
+            marker,
+            frame.name,
+            f"{frame.score:.2f}",
+            f"{frame.detail:.3f}",
+            f"{frame.highlight_clipping * 100:.0f}%",
+            f"{frame.width}x{frame.height}",
+            " ".join(notes),
+        )
+    console.print(table)
+    if selection.note:
+        console.print(f"\n[dim]{selection.note}[/dim]")
+
+
+@app.command()
+def analyse(
+    images: Annotated[list[Path], typer.Argument(help="Images to measure.", exists=True)],
+    as_json: Annotated[bool, _json_option()] = False,
+) -> None:
+    """Measure images and say which one would be reconstructed, without running a model.
+
+    Every model in VOLUM reconstructs from a single image, so a set of
+    photographs is a set of candidates, not a set of views to merge.
+    """
+    service = VolumService()
+    try:
+        selection = service.analyse_images(list(images))
+    except ServiceError as error:
+        err_console.print(f"[red]{error.message}[/red]")
+        if error.technical:
+            err_console.print(f"[dim]{error.technical}[/dim]")
+        raise typer.Exit(1) from error
+    finally:
+        service.shutdown()
+
+    if as_json:
+        console.print_json(selection.model_dump_json())
+        return
+    _render_frames(selection)
 
 
 @app.command()

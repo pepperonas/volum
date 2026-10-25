@@ -23,7 +23,12 @@ Runtime, a separate 330 MB download). It changes the geometry, not the look: on 
 photograph exported for printing, the background left the repaired model as three separate
 solids; with the subject cut out it is one.
 
-Not done: signing (no certificates), updates, multi-image, and TRELLIS.2 — integrated and
+**Several photographs are measured and the best one reconstructed** — not combined, and
+labelled as exactly that. Costs 0.45 s for ten images. It also closed a silent defect it
+was not looking for: nothing applied the EXIF orientation tag, so a phone photograph taken
+in portrait was reconstructed on its side.
+
+Not done: signing (no certificates), updates, and TRELLIS.2 — integrated and
 licence-checked but never installed or run here (needs DINOv3 access and an idle
 machine).
 
@@ -62,6 +67,7 @@ uv run volum models install birefnet                   # background removal, 330
 uv run volum generate image.png --seed 7               # real inference
 uv run volum generate image.png --print --size-mm 60   # STL + 3MF, repaired, validated
 uv run volum generate image.png --no-remove-background # keep the background in the mesh
+uv run volum analyse a.jpg b.jpg c.jpg                 # which frame would be used, and why
 
 # Packaging (docs/packaging.md)
 python3 scripts/build_runtime.py                       # the bundled engine runtime, ~220 MB
@@ -135,6 +141,20 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
   queued job runs the way it was submitted); `pipeline.run` *performs* it, because it owns
   stage transitions. `preprocess/background.py` runs the worker;
   `providers/workers/segment_worker.py` is the worker and imports nothing from `volum_core`.
+- **Frame selection is the same shape as background removal, and shares its stage.**
+  `VolumService._preprocessor` does three things in order, each depending on the one
+  before: measure the frames and choose one, correct its stored orientation, cut its
+  background out. Choosing first is what keeps the cost sane — the segmenter takes 43 s
+  per image. `preprocess/frames.py` holds the scoring, `frame_worker.py` holds the
+  measuring, and the two halves of the stage report through one `Preparation`.
+- **`frame_worker.py` runs in the engine's own interpreter**, unlike every other worker.
+  It needs only Pillow and NumPy, which the engine already has, so frame analysis works on
+  a fresh install with nothing downloaded. It is still a subprocess, because images are
+  untrusted input (spec §50) and a decoder that aborts must not take the engine with it.
+- **Whether to select a frame is decided at submission from declared capability**, stored
+  on the record as `select_frame`, never re-derived at run time from the provider's
+  identity. A provider that genuinely conditions on several views has to receive all of
+  them, and handing it one would be a silent loss.
 - **`models/tools.py` is a second catalogue, and the separation is the point.**
   `models/registry.py` lists things that turn an image into a mesh; a row there for a
   segmenter would claim you could generate with it. Tools install through the same
@@ -217,6 +237,13 @@ a service test once saved a fake Hugging Face token into the developer's real
   app had been built once. ⚠️ A pattern containing a slash is anchored to the directory
   holding the `.gitignore`, so `gen/schemas/` matches only at the root — the one under
   `apps/desktop/src-tauri` needs `**/gen/schemas/`.
+- **Pillow is a core dependency, not the `imaging` extra.** Frame measurement and the
+  orientation fix decode the user's own images, and both must work on a fresh install with
+  nothing downloaded. It is MIT-CMU (`docs/licenses.md`); note that its `LICENSE` bundles
+  22 vendored C libraries after its own, which have not been read.
+- **Use `Image.Resampling.*`, not `Image.LANCZOS`.** The module-level aliases still work
+  at runtime in Pillow 12 and 13 but are absent from the type stubs, so mypy only started
+  flagging them once Pillow became a real dependency it could resolve.
 - **TypeScript is pinned to 5.9, not 7.** No `typescript-eslint` release supports 7
   (`>=4.8.4 <6.1.0`), and a type checker whose results the linter cannot read is half a
   tool. There is also no jsdom: jsdom 30 pulls undici 8, which needs a newer Node than
@@ -243,6 +270,35 @@ a service test once saved a fake Hugging Face token into the developer's real
   sealed. Verify the **installed** copy, not just the built one — that is where the
   bytecode defect lived.
 - **Copy an app bundle with `ditto`, not `cp -R`.**
+- **The window's CSP applies only once installed.** Tauri injects it as a header on its
+  own protocol, so it is absent under `tauri dev`, where Vite serves the page over http.
+  Every CSP mistake is therefore invisible in development and fatal after installing —
+  which is how the viewer shipped unable to load a mesh: `connect-src` did not allow
+  `blob:`, and three.js's `FileLoader` fetches exactly that. Verify anything the policy
+  touches against `/Applications/VOLUM.app`, never only against the dev build;
+  `src/lib/csp.test.ts` pins the contract.
+- **Synthetic clicks do reach the Tauri webview, and its accessibility tree does expose
+  the buttons.** An earlier note here said otherwise; the cause was focus. System Events
+  resolves `click at` against the **frontmost application**, so activate VOLUM first —
+  otherwise the click lands in whatever is in front, which is usually the terminal that
+  sent it. A working probe: activate, click, `delay`, then `do shell script
+  "screencapture …"` inside the *same* osascript, or the terminal takes focus back before
+  the capture.
+- **The detail measure is comparable within a set and nowhere else.** Two equally sharp
+  photographs of different subjects differ by 5.8× on it, because a furry horse has more
+  gradient energy than a smooth teapot. So there is no absolute sharpness verdict in
+  VOLUM and there must not be one. Frames within 3% of the best are reported as a tie —
+  that is the measured noise floor of the instrument — and inside the band the order the
+  user gave decides, not the third decimal place.
+- **Three things about that measure were established by measuring, and each changed the
+  design.** Dividing the Laplacian variance by the luminance variance makes it blind to
+  exposure and contrast (within 3%) while still falling 25× under a one-pixel blur; the
+  plain variance rose 2.8× when a photograph was merely brightened. Resizing to the grid
+  in **both** directions is load-bearing: resized only downwards, a 64 px copy of a 768 px
+  image scores *higher* than the original and would be chosen. And clipping has to be
+  penalised separately, because it makes the detail measure lie — 19% blown out raised it
+  2.1×. Masking the clipped pixels out instead was tried and is worse: it keeps the steep
+  edges around the blown regions and raises the score further.
 - **Background removal costs about as much as a small generation.** Measured on this
   10-core M1 Pro: 2.4 s to load the model, then **43 s per image under moderate load and
   60–95 s under heavy load**. The ONNX export declares a **fixed input shape of
@@ -258,6 +314,14 @@ a service test once saved a fake Hugging Face token into the developer's real
   the images that need it. There is deliberately no `image.mode` check in front of the
   opacity test — it is redundant, and it excluded palette images carrying a transparency
   index, which *are* mattes.
+- **Nothing applied the EXIF orientation tag before this.** A photograph stored with
+  `orientation=6` is 4032×3024 on disk and 3024×4032 upright, and every VOLUM stage read
+  the stored pixels — so a portrait phone photograph was reconstructed lying on its side,
+  silently. The chosen frame is corrected before the generator sees it, into a copy; the
+  user's own file is never rewritten.
+- **`frame_worker` and `segment_worker` duplicate the matte constants because they must.**
+  One runs in an environment where `volum_core` is not installed, so they cannot share a
+  module. `test_the_two_workers_agree_on_what_a_matte_is` pins them together.
 - **BiRefNet's preprocessing constants are written out in the worker, not read from
   `preprocessor_config.json` at run time.** Getting them wrong does not raise; it silently
   returns a worse mask. A test compares them against the file that ships beside the
@@ -281,6 +345,10 @@ a service test once saved a fake Hugging Face token into the developer's real
   because the thing the user asked for did not happen.
 - **A failed poll is not an empty result.** A silent empty mesh must fail the job, not
   export as an asset — this failure mode is documented upstream.
+- **A tie must be reported as a tie.** The selector's first draft presented a 0.4%
+  difference as a decision and printed "1.0x the next frame" as the reason — a fabricated
+  justification of exactly the kind §37 forbids, arrived at honestly by rounding. If the
+  instrument cannot tell two inputs apart, the output says so.
 - **Numbers on screen must say what they measure.** The quality report measures the mesh
   as the model produced it, in model units; the scale to millimetres happens on export.
   Labelling the report's dimensions "mm" because a print size was asked for read

@@ -7,7 +7,13 @@ import { duration, elapsed, fileName, stageWord } from "../lib/format";
 import { asEngineError, useAsync, useTicker } from "../lib/hooks";
 import { Badge, Button, Card, Failure, Progress, Spinner, cx } from "../components/ui";
 import { AlertIcon, FolderIcon, PrinterIcon, StopIcon } from "../components/icons";
-import { isTerminal, type JobRecord, type ModelEntry } from "../lib/types";
+import {
+  isTerminal,
+  type FrameMeasurement,
+  type FrameSelection,
+  type JobRecord,
+  type ModelEntry,
+} from "../lib/types";
 
 /** What the result is *for*. It decides formats, repair and how strict validation is. */
 type Target = "print" | "render";
@@ -24,6 +30,8 @@ export default function Generate({ navigate }: { navigate: Navigate }) {
   const [seed, setSeed] = useState<string>("");
   const [job, setJob] = useState<JobRecord | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [frames, setFrames] = useState<FrameSelection | null>(null);
+  const [measuring, setMeasuring] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof asEngineError> | null>(null);
   const abort = useRef<AbortController | null>(null);
 
@@ -39,7 +47,11 @@ export default function Generate({ navigate }: { navigate: Navigate }) {
 
   const addImages = useCallback((paths: string[]) => {
     const wanted = paths.filter((path) => /\.(png|jpe?g|webp)$/i.test(path));
-    if (wanted.length > 0) setImages((current) => [...new Set([...current, ...wanted])]);
+    if (wanted.length === 0) return;
+    // Any measurement describes the set it was made from, so changing the set
+    // discards it rather than leaving a stale ranking on screen.
+    setFrames(null);
+    setImages((current) => [...new Set([...current, ...wanted])]);
   }, []);
 
   // Dropping a file on the window gives real paths; a webview file input does not.
@@ -58,6 +70,19 @@ export default function Generate({ navigate }: { navigate: Navigate }) {
     const picked = await open({ multiple: true, filters: [IMAGE_FILTER] });
     if (picked) addImages(Array.isArray(picked) ? picked : [picked]);
   }, [addImages]);
+
+  // Asking before committing: the measurement takes under a second, the
+  // generation it informs takes minutes.
+  const measure = useCallback(async () => {
+    setMeasuring(true);
+    try {
+      setFrames(await api.analyse(images));
+    } catch (error) {
+      setFailure(asEngineError(error));
+    } finally {
+      setMeasuring(false);
+    }
+  }, [images]);
 
   const start = useCallback(async () => {
     if (!modelId || images.length === 0) return;
@@ -160,32 +185,60 @@ export default function Generate({ navigate }: { navigate: Navigate }) {
             </div>
           ) : (
             <ul className="space-y-1">
-              {images.map((path) => (
-                <li
-                  key={path}
-                  className="flex items-center justify-between gap-3 rounded-md bg-raised px-3 py-1.5"
-                >
-                  <span className="truncate text-[13px]" title={path}>
-                    {fileName(path)}
-                  </span>
-                  <Button
-                    tone="quiet"
-                    className="px-1.5 py-0.5 text-[11px]"
-                    onClick={() => setImages((current) => current.filter((p) => p !== path))}
-                  >
-                    Remove
-                  </Button>
-                </li>
-              ))}
+              {images.map((path, index) => {
+                // Matched by position, not by name: two files picked from
+                // different folders can share a basename.
+                const measured = frames?.frames[index];
+                const isChosen = frames?.chosen_index === index;
+                return (
+                  <li key={path} className="rounded-md bg-raised px-3 py-1.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-[13px]" title={path}>
+                          {fileName(path)}
+                        </span>
+                        {isChosen && images.length > 1 && <Badge tone="ok">will be used</Badge>}
+                        {measured?.error && <Badge tone="bad">unreadable</Badge>}
+                      </span>
+                      <Button
+                        tone="quiet"
+                        className="px-1.5 py-0.5 text-[11px]"
+                        onClick={() => {
+                          setFrames(null);
+                          setImages((current) => current.filter((p) => p !== path));
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                    {measured && <FrameDetail frame={measured} />}
+                  </li>
+                );
+              })}
             </ul>
           )}
 
           {images.length > 1 && chosen && !chosen.metadata.capabilities.includes("multi_image") && (
-            <p className="mt-3 flex items-start gap-2 text-[12px] text-warn">
-              <AlertIcon className="mt-0.5 shrink-0 text-[14px]" />
-              {chosen.metadata.name} uses a single image. The first will be used; the others are
-              ignored.
-            </p>
+            <div className="mt-3 space-y-2">
+              <p className="flex items-start gap-2 text-[12px] text-warn">
+                <AlertIcon className="mt-0.5 shrink-0 text-[14px]" />
+                {chosen.metadata.name} reconstructs from one image. All {images.length} will be
+                measured and the best one used — they are not combined.
+              </p>
+              {frames ? (
+                <p className="text-[12px] text-ink-faint">{frames.reason}</p>
+              ) : (
+                <Button
+                  tone="quiet"
+                  className="px-1.5 py-0.5 text-[12px]"
+                  disabled={measuring}
+                  onClick={() => void measure()}
+                >
+                  {measuring ? <Spinner /> : null}
+                  {measuring ? "Measuring…" : "Measure them now"}
+                </Button>
+              )}
+            </div>
           )}
         </Card>
 
@@ -456,5 +509,31 @@ function Running({
         </Button>
       </div>
     </>
+  );
+}
+
+
+/**
+ * What was measured about one frame.
+ *
+ * Deliberately not a score bar: the score is only comparable inside this set,
+ * so a bar out of ten would read as a verdict on the photograph. The numbers
+ * that mean something on their own are the pixels, and the notes say the rest.
+ */
+function FrameDetail({ frame }: { frame: FrameMeasurement }) {
+  if (frame.error) {
+    return <p className="mt-1 text-[11px] text-bad">{frame.error}</p>;
+  }
+  const notes = [...frame.notes];
+  if (frame.near_identical_to) notes.push(`Near-identical to ${frame.near_identical_to}.`);
+  return (
+    <div className="mt-1 space-y-0.5 text-[11px] text-ink-faint">
+      <p className="num">
+        {frame.width}&times;{frame.height} · detail {frame.detail.toFixed(3)}
+        {frame.highlight_clipping > 0.005 &&
+          ` · ${(frame.highlight_clipping * 100).toFixed(0)}% blown out`}
+      </p>
+      {notes.length > 0 && <p>{notes.join(" ")}</p>}
+    </div>
   );
 }

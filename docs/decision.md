@@ -356,6 +356,27 @@ Each is independent; accept or reject individually.
   load — the ONNX export's input shape is fixed at 1024×1024, so there is no cheaper
   resolution to run at.
 
+- *Multi-image as frame selection* — **built**. Several photographs of one object are
+  measured and the best one is reconstructed, labelled as exactly that;
+  `MULTI_IMAGE` stays `false` and the frames are never combined. The ranking rests on
+  one measurement — gradient energy relative to the image's own spread, at the 512 px
+  grid TripoSR's `cond_image_size` declares — plus a penalty for highlight clipping,
+  which exists because clipping makes the first measure *lie*: brightening a photograph
+  by 2.6× blew out 19% of it and raised its score 2.1×. Everything else (resolution,
+  contrast, shadow clipping) was measured to be either already inside that number or
+  not safely usable, and is reported rather than scored. Near-identical frames are
+  reported and never dropped. Costs 0.45 s for ten images.
+
+  It also closed a silent defect it was not looking for: **nothing in VOLUM applied the
+  EXIF orientation tag**, so a photograph taken in portrait on a phone was reconstructed
+  lying on its side. The chosen frame is now corrected before the generator sees it.
+
+  ⚠️ Honest about what it buys: unlike background removal, there is **no countable
+  defect** to point at. Reconstructing the same photograph from a heavily blurred copy
+  still produced one watertight, manifold solid (45,872 vertices against 46,728) — just
+  a smoother, 15% shallower one. Selection does not decide whether you get a printable
+  model; it decides which of your photographs the model is of.
+
 **Still open**
 
 1. **Does TRELLIS.2 complete on 16 GB unified memory, and how slowly?** No published data
@@ -364,7 +385,8 @@ Each is independent; accept or reject individually.
    and texture models, which STL cannot carry and VOLUM does not fetch), so disk is no
    longer the obstacle. Two things still are: DINOv3 is gated behind a manual approval,
    and the macOS GPU watchdog kills long Metal kernels under display-server load.
-*(Background removal was the second item here. It is built; see the settled list above.)*
+*(Background removal and multi-image were the second and third items here. Both are
+built; see the settled list above.)*
 
 ---
 

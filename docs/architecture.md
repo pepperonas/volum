@@ -258,8 +258,18 @@ Every stage is a pure-ish function over a job context with explicit inputs and o
 each is testable in isolation (spec §19). Original input files are never modified;
 preprocessing writes derivatives (spec §16).
 
+**`analyze` and `preprocess` are one job stage with three steps**, because each depends on
+the one before: measure the candidate frames and choose one, correct that frame's stored
+orientation, cut its background out. Choosing first is what keeps the cost proportionate —
+measuring ten frames takes 0.45 s, segmenting one takes 43 s. The steps report through a
+single `Preparation`, and the asset records all three answers.
+
 Background removal uses **BiRefNet (MIT)**, not RMBG-2.0 (CC BY-NC), even where an upstream
 port defaults to the latter (`docs/licenses.md`).
+
+Frame selection never combines frames and never claims to. `Capability.MULTI_IMAGE` stays
+`false`, and the asset's `frame_selection.chosen_index` is what tells a reader which of
+`source_images` the mesh is actually of.
 
 Validation is mandatory and can fail a job. A mesh that is empty, non-finite or
 degenerate is a failure, not an export — upstream has a documented failure mode where the

@@ -125,6 +125,11 @@ class JobRecord(BaseModel):
     #: rather than read from settings at run time: a job queued yesterday must
     #: run the way it was submitted, not the way the settings read today.
     remove_background: bool = True
+    #: Whether to measure the inputs and reconstruct from the best one. Decided
+    #: at submission from the model's declared capabilities, not at run time
+    #: from its identity: a provider that genuinely conditions on several views
+    #: must receive all of them, and handing it one would be a silent loss.
+    select_frame: bool = True
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None

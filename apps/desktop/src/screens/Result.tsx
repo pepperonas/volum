@@ -8,7 +8,7 @@ import { asEngineError, useAsync } from "../lib/hooks";
 import { Viewer, ViewerLoading } from "../components/Viewer";
 import { Badge, Button, Card, Failure, Row, Spinner } from "../components/ui";
 import { DownloadIcon } from "../components/icons";
-import type { BackgroundRemoval, JobRecord } from "../lib/types";
+import type { BackgroundRemoval, FrameSelection, JobRecord } from "../lib/types";
 
 interface QualityIssue {
   severity: "info" | "warning" | "fatal";
@@ -36,6 +36,7 @@ interface AssetMetadata {
   target_size_mm: number | null;
   repair_strategy: string | null;
   background_removal: BackgroundRemoval | null;
+  frame_selection: FrameSelection | null;
   export_formats: string[];
   processing_time_seconds: number | null;
   source_image_sha256: string[];
@@ -255,6 +256,18 @@ function Completed({ job }: { job: JobRecord }) {
                   {BACKGROUND_LABEL[metadata.value.background_removal.outcome]}
                 </Row>
               )}
+              {metadata.value.frame_selection &&
+                metadata.value.frame_selection.frames.length > 1 && (
+                  <Row label="Frame">
+                    <span className="selectable">
+                      {metadata.value.frame_selection.chosen}
+                    </span>{" "}
+                    <span className="text-ink-faint">
+                      ({metadata.value.frame_selection.chosen_index + 1} of{" "}
+                      {metadata.value.frame_selection.frames.length}, not combined)
+                    </span>
+                  </Row>
+                )}
               <Row label="From">
                 <span className="selectable num break-all text-[11px] text-ink-faint">
                   {metadata.value.source_image_sha256[0]?.slice(0, 24) ?? "—"}
@@ -264,6 +277,12 @@ function Completed({ job }: { job: JobRecord }) {
           ) : (
             <p className="text-[13px] text-ink-muted">No metadata was written.</p>
           )}
+          {metadata.value?.frame_selection?.reason &&
+            metadata.value.frame_selection.frames.length > 1 && (
+              <p className="mt-3 border-t border-hairline pt-3 text-[12px] text-ink-faint">
+                {metadata.value.frame_selection.reason}
+              </p>
+            )}
           {metadata.value?.background_removal && (
             <p className="mt-3 border-t border-hairline pt-3 text-[12px] text-ink-faint">
               {metadata.value.background_removal.note}

@@ -19,7 +19,14 @@ from ..export import ExportedFile, ExportFormat, ExportOptions, export_mesh
 from ..hardware.detect import detect_hardware
 from ..jobs.manager import CancellationToken, JobCancelledError, JobManager
 from ..jobs.types import InvalidTransitionError, JobError, JobRecord, JobStatus, can_transition
-from ..preprocess import BackgroundOutcome, BackgroundRemoval, BackgroundRemovalError
+from ..preprocess import (
+    BackgroundOutcome,
+    BackgroundRemoval,
+    BackgroundRemovalError,
+    FrameAnalysisError,
+    FrameOutcome,
+    FrameSelection,
+)
 from ..providers.types import GenerationRequest, GenerationResult, ImageTo3DProvider
 from ..providers.worker_provider import ProviderExecutionError
 from ..validation import QualityReport, validate_asset
@@ -41,11 +48,37 @@ _STAGE_MAP = {
 }
 
 
+class Preparation(BaseModel):
+    """What the preprocessing stage did, and what the generator should see.
+
+    Two steps live in this one stage and both have something to say, so they
+    are reported together rather than as a growing tuple: which frame was
+    chosen out of the set, and whether its background was cut out.
+    """
+
+    #: What to generate from. The job's own ``input_files`` stay the user's
+    #: images — that is what the metadata records and what a re-run starts from.
+    images: list[Path]
+    frames: FrameSelection | None = None
+    background: BackgroundRemoval | None = None
+
+    @property
+    def notes(self) -> list[str]:
+        """What to tell the user, in the order the work happened.
+
+        Empty notes are dropped rather than reported: a stage with nothing to
+        say about one image should not file a progress entry saying so.
+        """
+        return [
+            part.note for part in (self.frames, self.background) if part is not None and part.note
+        ]
+
+
 #: Prepares the images a generator will see. Given the staged inputs and the
 #: job's output directory, returns what to generate from and what it did. The
 #: pipeline owns the *stage*; what happens inside it is the service's decision,
 #: which is why this arrives as a callable rather than a flag.
-Preprocessor = Callable[[list[Path], Path], tuple[list[Path], "BackgroundRemoval"]]
+Preprocessor = Callable[[list[Path], Path], Preparation]
 
 
 class AssetMetadata(BaseModel):
@@ -62,6 +95,10 @@ class AssetMetadata(BaseModel):
     #: What the preprocessing stage did. Absent on results made before the stage
     #: existed, which is why it is optional rather than defaulted to "not done".
     background_removal: BackgroundRemoval | None = None
+    #: Which of ``source_images`` was actually reconstructed, and why. Present
+    #: whenever the input was measured; its ``chosen_index`` is the only thing
+    #: that tells a reader the other frames were not combined.
+    frame_selection: FrameSelection | None = None
     model: str
     model_version: str | None = None
     runtime: str | None = None
@@ -98,7 +135,7 @@ def _record_success(  # noqa: PLR0913 - a stage boundary; all keyword-only
     parameters: dict[str, object],
     seed: int | None,
     result: GenerationResult,
-    background: BackgroundRemoval | None,
+    prepared: Preparation,
     token: CancellationToken,
     on_stage: Callable[[str], None] | None,
 ) -> PipelineResult:
@@ -116,7 +153,8 @@ def _record_success(  # noqa: PLR0913 - a stage boundary; all keyword-only
         export_formats=[fmt.value for fmt in export_options.formats],
         target_size_mm=export_options.target_size_mm,
         repair_strategy=repair_report.strategy.value if repair_report else None,
-        background_removal=background,
+        background_removal=prepared.background,
+        frame_selection=prepared.frames,
         model=record.model_id,
         model_version=provider.metadata.version,
         runtime=result.runtime,
@@ -217,21 +255,36 @@ def _fail_validation(manager: JobManager, record: JobRecord, report: QualityRepo
 
 def _preprocess(
     images: list[Path], output_dir: Path, preprocessor: Preprocessor | None
-) -> tuple[list[Path], BackgroundRemoval | None]:
+) -> Preparation:
     """Prepare the images for the generator, surviving a preprocessor that fails.
 
-    A failed cut-out does not fail the job. The original image is still a
-    legitimate input — it just carries its background into the mesh — so the
-    stage degrades to saying what happened rather than refusing to work.
+    Neither half of this stage may fail the job. An image is a legitimate input
+    without a cut-out — it just carries its background into the mesh — and it is
+    a legitimate input unmeasured, because the first frame is still a frame. So
+    the stage degrades to saying what happened rather than refusing to work.
     """
     if preprocessor is None:
-        return images, None
+        return Preparation(images=images)
     try:
         return preprocessor(images, output_dir)
     except BackgroundRemovalError as error:
-        return images, BackgroundRemoval(
-            outcome=BackgroundOutcome.FAILED,
-            note=f"Background removal failed, so the image was used as it is. {error.message}",
+        return Preparation(
+            images=images,
+            background=BackgroundRemoval(
+                outcome=BackgroundOutcome.FAILED,
+                note=f"Background removal failed, so the image was used as it is. {error.message}",
+            ),
+        )
+    except FrameAnalysisError as error:
+        return Preparation(
+            images=images,
+            frames=FrameSelection(
+                outcome=FrameOutcome.FAILED,
+                chosen_index=0,
+                chosen=images[0].name,
+                reason="The frames could not be measured, so the first one was used.",
+                note=(f"The images could not be measured, so the first was used. {error.message}"),
+            ),
         )
 
 
@@ -267,16 +320,14 @@ def run_pipeline(  # noqa: PLR0913 - all keyword-only; a parameter object would
         token.raise_if_cancelled()
         stages.enter(JobStatus.PREPROCESSING, "Preparing images")
 
-        # The generator sees these; `images` stays the user's own files, because
-        # that is what the metadata records and what a re-run starts from.
-        generator_images, background = _preprocess(images, output_dir, preprocessor)
-        if background is not None:
-            manager.report(record, background.note)
-            token.raise_if_cancelled()
+        prepared = _preprocess(images, output_dir, preprocessor)
+        for note in prepared.notes:
+            manager.report(record, note)
+        token.raise_if_cancelled()
 
         result = provider.generate(
             GenerationRequest(
-                images=generator_images, output_dir=output_dir, seed=seed, parameters=parameters
+                images=prepared.images, output_dir=output_dir, seed=seed, parameters=parameters
             ),
             stages.progress,
         )
@@ -317,7 +368,7 @@ def run_pipeline(  # noqa: PLR0913 - all keyword-only; a parameter object would
             parameters=parameters,
             seed=seed,
             result=result,
-            background=background,
+            prepared=prepared,
             token=token,
             on_stage=on_stage,
         )

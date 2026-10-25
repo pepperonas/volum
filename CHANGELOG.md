@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Several photographs are measured and the best one reconstructed, said as exactly
+  that.** Every model here is single-image, so a set of photographs is a set of
+  candidates and never a set of views to merge — `MULTI_IMAGE` stays `false`. The
+  ranking rests on one measurement: gradient energy relative to the image's own
+  spread, at the 512 px grid TripoSR's own config declares, which makes it blind to
+  exposure and contrast (within 3%) while a one-pixel blur drops it 25×. A separate
+  penalty for blown highlights exists because clipping makes that measure *lie* —
+  brightening a photograph by 2.6× blew out 19% of it and raised its score 2.1×.
+  Resolution, contrast and shadow clipping are reported but not scored, each for a
+  measured reason. Frames that look alike are reported and never dropped. Ten images
+  cost 0.45 s against a generation measured in minutes.
+- **The EXIF orientation tag is applied before the generator sees the image.** Nothing
+  in VOLUM applied it, so a photograph taken in portrait on a phone was reconstructed
+  lying on its side — silently, because every stage read the stored pixels. The user's
+  own file is never rewritten; the corrected copy lives in the job.
+- `volum analyse <images…>` and `POST /api/images/analyse` answer which frame would be
+  used, and why, without running a model. In the window the chosen frame is marked
+  before generating and named on the result.
 - **Background removal as VOLUM's own preprocessing stage.** Every generator here
   is single-image and reconstructs what it is shown, so a wall behind the subject
   becomes geometry — and in a printable model, a second object on the plate.
@@ -21,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   input that the asset describes honestly.
 - `volum models install birefnet`, a `Preprocessing` section in
   `volum models list`, `GET /api/tools`, and the setting in the window.
+- Pillow as a direct dependency, MIT-CMU, read from its licence text (`docs/licenses.md`).
 - Phase 0 environment and repository audit (`docs/audit-phase0.md`).
 - Phase 1 image-to-3D model research, primary-source verified (`docs/research.md`).
 - Model capability / hardware / licence evaluation (`docs/model-evaluation.md`).
@@ -111,6 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the "Built with DINOv3" attribution and the BiRefNet substitution.
 
 ### Fixed
+- **The packaged window could not load a mesh into the viewer.** Its content security
+  policy did not permit fetching a `blob:` URL, and the result screen hands three.js
+  exactly that, because the engine wants a bearer token on every request and a loader
+  cannot carry one; WebKit refused with "Load failed" and the viewer stayed empty.
+  Invisible in development by construction: Tauri injects the policy as a header on its
+  own protocol, so it applies only once installed. Pinned as a contract — if anything in
+  the window makes a blob URL, the effective `connect-src` has to allow `blob:`.
 - **The packaged application broke its own code signature on first run.** The bundled
   interpreter wrote bytecode into its sealed `Contents/Resources` — 1,280 complaints from
   `codesign --verify`, 60 files added and 1,219 rewritten, every one a `.pyc`. Two causes

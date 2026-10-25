@@ -17,7 +17,7 @@ import trimesh
 from volum_core.export import PRINT_FORMATS, ExportFormat, ExportOptions
 from volum_core.jobs import JobManager, JobStatus, JobStore
 from volum_core.models.registry import TRIPOSR
-from volum_core.pipeline import PipelineResult, read_asset_metadata, run_pipeline
+from volum_core.pipeline import PipelineResult, Preparation, read_asset_metadata, run_pipeline
 from volum_core.pipeline import run as run_module
 from volum_core.preprocess import (
     BackgroundOutcome,
@@ -406,9 +406,12 @@ def test_the_generator_gets_the_cutout_while_the_metadata_keeps_the_original(
     cutout = tmp_path / "cut.png"
     cutout.write_bytes(b"cut")
 
-    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
-        return [cutout], BackgroundRemoval(
-            outcome=BackgroundOutcome.REMOVED, note="done", coverage=0.3
+    def preprocessor(images: list[Path], output_dir: Path) -> Preparation:
+        return Preparation(
+            images=[cutout],
+            background=BackgroundRemoval(
+                outcome=BackgroundOutcome.REMOVED, note="done", coverage=0.3
+            ),
         )
 
     result = _run(manager, provider, tmp_path, preprocessor=preprocessor)
@@ -426,7 +429,7 @@ def test_a_preprocessor_that_fails_does_not_fail_the_job(
     """An image with its background is still a legitimate input."""
     provider = RecordingProvider()
 
-    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
+    def preprocessor(images: list[Path], output_dir: Path) -> Preparation:
         raise BackgroundRemovalError("The model could not be loaded.")
 
     result = _run(manager, provider, tmp_path, preprocessor=preprocessor)
@@ -453,9 +456,13 @@ def test_without_a_preprocessor_nothing_is_claimed_about_the_background(
 def test_the_preprocessing_note_reaches_the_job_progress(
     manager: JobManager, tmp_path: Path
 ) -> None:
-    def preprocessor(images: list[Path], output_dir: Path) -> tuple[list[Path], BackgroundRemoval]:
-        return images, BackgroundRemoval(
-            outcome=BackgroundOutcome.NOT_INSTALLED, note="Background removal is not installed."
+    def preprocessor(images: list[Path], output_dir: Path) -> Preparation:
+        return Preparation(
+            images=images,
+            background=BackgroundRemoval(
+                outcome=BackgroundOutcome.NOT_INSTALLED,
+                note="Background removal is not installed.",
+            ),
         )
 
     result = _run(manager, FakeProvider(), tmp_path, preprocessor=preprocessor)

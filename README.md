@@ -37,6 +37,9 @@ machine. No cloud, no account, no telemetry, no remote inference.
 - **Honest about licences.** Every model's licence — including the restrictive
   dependencies inside its pipeline — is documented in
   [`docs/licenses.md`](docs/licenses.md) and shown before you download anything.
+- **Honest about what it is doing.** Several photographs are measured and the best one
+  reconstructed, and the result says which — because no model here combines views, and
+  quietly using the first image would be a feature that does not exist.
 
 ## Planned platforms
 
@@ -90,8 +93,19 @@ size:
 uv run volum generate photo.png --print --size-mm 60 --single-part
 ```
 
-Images with a transparent background work best — VOLUM does not yet separate the subject
-for you, and it says so rather than pretending otherwise.
+VOLUM separates the subject from its background itself, which changes the geometry rather
+than the look: on one photograph exported for printing, the background left the repaired
+model as three separate solids; with the subject cut out it is one. It is a separate
+download (`volum models install birefnet`, 330 MB) and a job says plainly when it is not
+installed rather than pretending.
+
+Several photographs of one object are **measured, and the best one reconstructed** — they
+are not combined, because no model here can do that:
+
+```bash
+uv run volum analyse front.jpg side.jpg angle.jpg   # which one, and why
+uv run volum generate front.jpg side.jpg angle.jpg  # measures them, uses the best
+```
 
 ### The engine
 

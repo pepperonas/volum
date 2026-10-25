@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from volum_core.hardware import DoctorReport
 from volum_core.jobs import JobRecord
+from volum_core.preprocess import FrameSelection
 from volum_core.service import (
     InstallTask,
     JobRequest,
@@ -80,6 +81,12 @@ class SettingsPatch(BaseModel):
 
 class RemovedResponse(BaseModel):
     removed: bool
+
+
+class AnalyseBody(BaseModel):
+    """Images to measure. Read only — nothing is copied into the data directory."""
+
+    images: list[Path] = Field(min_length=1)
 
 
 class JobListQuery(BaseModel):
@@ -208,6 +215,20 @@ def create_app(service: VolumService, *, token: str) -> FastAPI:
     @app.delete("/api/models/{model_id}", response_model=RemovedResponse)
     async def remove_model(model_id: str) -> RemovedResponse:
         return RemovedResponse(removed=service.remove_model(model_id))
+
+    # --- input analysis -------------------------------------------------------
+
+    @app.post("/api/images/analyse", response_model=FrameSelection)
+    async def analyse_images(body: AnalyseBody) -> FrameSelection:
+        """Which of these images would be reconstructed, and why.
+
+        Separate from creating a job on purpose: a generation takes minutes and
+        this takes under a second, so the window can show the answer before the
+        user commits to one. Every model here reconstructs from a single image,
+        so a set of photographs is a set of candidates and never a set of views
+        to merge.
+        """
+        return service.analyse_images(list(body.images))
 
     # --- jobs -----------------------------------------------------------------
 

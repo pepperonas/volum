@@ -87,7 +87,7 @@ def preprocess(image: Any) -> Any:
     import numpy as np
     from PIL import Image
 
-    resized = image.convert("RGB").resize((INPUT_SIZE, INPUT_SIZE), Image.BILINEAR)
+    resized = image.convert("RGB").resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR)
     scaled = np.asarray(resized, dtype=np.float32) / 255.0
     mean = np.array(IMAGE_MEAN, dtype=np.float32)
     std = np.array(IMAGE_STD, dtype=np.float32)
@@ -121,7 +121,7 @@ def to_mask(raw: Any, size: tuple[int, int]) -> Any:
         array = array[0]
     mask = 1.0 / (1.0 + np.exp(-array))
     as_image = Image.fromarray((mask * 255.0).astype(np.uint8), mode="L")
-    return as_image.resize(size, Image.BILINEAR)
+    return as_image.resize(size, Image.Resampling.BILINEAR)
 
 
 def main() -> None:
