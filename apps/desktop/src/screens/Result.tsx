@@ -8,7 +8,7 @@ import { asEngineError, useAsync } from "../lib/hooks";
 import { Viewer, ViewerLoading } from "../components/Viewer";
 import { Badge, Button, Card, Failure, Row, Spinner } from "../components/ui";
 import { DownloadIcon } from "../components/icons";
-import type { JobRecord } from "../lib/types";
+import type { BackgroundRemoval, JobRecord } from "../lib/types";
 
 interface QualityIssue {
   severity: "info" | "warning" | "fatal";
@@ -35,12 +35,26 @@ interface AssetMetadata {
   seed: number | null;
   target_size_mm: number | null;
   repair_strategy: string | null;
+  background_removal: BackgroundRemoval | null;
   export_formats: string[];
   processing_time_seconds: number | null;
   source_image_sha256: string[];
   reproducibility_note: string;
   hardware: Record<string, unknown>;
 }
+
+/**
+ * A short label per outcome. Written out rather than prettified from the enum:
+ * "not installed" and "no subject found" mean different things to whoever is
+ * looking at a disappointing mesh, and the full sentence is shown below anyway.
+ */
+const BACKGROUND_LABEL: Record<BackgroundRemoval["outcome"], string> = {
+  removed: "removed",
+  already_transparent: "already transparent",
+  no_subject_found: "no subject found",
+  not_installed: "not installed",
+  failed: "failed",
+};
 
 /** Artifacts the window offers to save, in the order it offers them. */
 const SAVEABLE: { key: string; label: string; extension: string }[] = [
@@ -236,6 +250,11 @@ function Completed({ job }: { job: JobRecord }) {
               {metadata.value.repair_strategy && (
                 <Row label="Repair">{metadata.value.repair_strategy}</Row>
               )}
+              {metadata.value.background_removal && (
+                <Row label="Background">
+                  {BACKGROUND_LABEL[metadata.value.background_removal.outcome]}
+                </Row>
+              )}
               <Row label="From">
                 <span className="selectable num break-all text-[11px] text-ink-faint">
                   {metadata.value.source_image_sha256[0]?.slice(0, 24) ?? "—"}
@@ -244,6 +263,11 @@ function Completed({ job }: { job: JobRecord }) {
             </dl>
           ) : (
             <p className="text-[13px] text-ink-muted">No metadata was written.</p>
+          )}
+          {metadata.value?.background_removal && (
+            <p className="mt-3 border-t border-hairline pt-3 text-[12px] text-ink-faint">
+              {metadata.value.background_removal.note}
+            </p>
           )}
           {metadata.value && (
             <p className="mt-3 border-t border-hairline pt-3 text-[12px] text-ink-faint">

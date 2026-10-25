@@ -347,6 +347,14 @@ Each is independent; accept or reject individually.
   (`docs/licenses.md` §3).
 - *Local HTTP engine* — built. Loopback only, ephemeral port, per-session bearer token
   (`docs/architecture.md` §3).
+- *Background removal* — **built**, as VOLUM's own preprocessing stage with BiRefNet
+  (lite) over ONNX Runtime, MIT throughout. It changes the geometry, not the look:
+  measured on one photograph exported for printing, the background contributed enough
+  surface to make the repaired model **three separate solids**; with the subject cut out
+  it is **one**. A separate 330 MB download, catalogued apart from the generators because
+  nothing in it makes a mesh. Costs 43 s per image on a 10-core M1 Pro under moderate
+  load — the ONNX export's input shape is fixed at 1024×1024, so there is no cheaper
+  resolution to run at.
 
 **Still open**
 
@@ -356,9 +364,7 @@ Each is independent; accept or reject individually.
    and texture models, which STL cannot carry and VOLUM does not fetch), so disk is no
    longer the obstacle. Two things still are: DINOv3 is gated behind a manual approval,
    and the macOS GPU watchdog kills long Metal kernels under display-server load.
-2. **Background removal.** VOLUM does not yet separate the subject; results are much
-   better with a transparent input, and the worker says so rather than pretending. The
-   architecture calls for BiRefNet (MIT) in VOLUM's own preprocessing stage.
+*(Background removal was the second item here. It is built; see the settled list above.)*
 
 ---
 

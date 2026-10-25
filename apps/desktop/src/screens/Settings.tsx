@@ -13,6 +13,7 @@ export default function Settings() {
   // saved value otherwise — the checkbox should not need an effect to learn
   // what the server already told us.
   const [pendingMarginal, setPendingMarginal] = useState<boolean | null>(null);
+  const [pendingCutout, setPendingCutout] = useState<boolean | null>(null);
 
   const save = useCallback(
     async (patch: Parameters<typeof api.updateSettings>[0]) => {
@@ -126,6 +127,37 @@ export default function Settings() {
             terms before their weights can be downloaded. The token is stored on this machine and
             sent only to the model host, only while downloading.
           </p>
+        </Card>
+
+        <Card title="Background">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={pendingCutout ?? settings.value.remove_background}
+              disabled={saving}
+              onChange={(event) => {
+                setPendingCutout(event.target.checked);
+                void save({ remove_background: event.target.checked });
+              }}
+              className="mt-0.5 accent-[var(--color-accent)]"
+            />
+            <span>
+              <span className="text-[13px]">Cut the subject out before reconstructing</span>
+              <span className="block text-[12px] text-ink-faint">
+                Every model here is single-image and reconstructs what it is shown, so a wall
+                behind the subject becomes geometry — and for a printable model, a second object
+                on the plate. An image that already has transparency is never re-cut.
+              </span>
+            </span>
+          </label>
+          {/* The state worth naming: asked for, and not happening. */}
+          {(pendingCutout ?? settings.value.remove_background) &&
+            !settings.value.background_remover_installed && (
+              <p className="mt-3 border-t border-hairline pt-3 text-[12px] text-ink-muted">
+                The background remover is not installed, so this is not happening yet. Install{" "}
+                <span className="num">birefnet</span> under Models.
+              </p>
+            )}
         </Card>
 
         <Card title="Models this machine cannot comfortably run">

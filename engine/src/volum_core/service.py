@@ -41,6 +41,7 @@ from .inputs import InputError, stage_inputs
 from .jobs import JobError, JobManager, JobRecord, JobStore
 from .models import InstallState, ModelInstallError, ModelManager
 from .models.registry import all_models, get_model
+from .models.tools import ToolMetadata, all_tools, get_tool
 from .pipeline import PipelineResult, Preprocessor, run_pipeline
 from .preprocess import (
     SEGMENTER_ID,
@@ -124,6 +125,20 @@ class InstallTask(BaseModel):
     error: JobError | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
+
+
+class ToolEntry(BaseModel):
+    """One preprocessing component as the UI needs it.
+
+    Separate from ``ModelEntry`` because the fields that matter differ: there is
+    nothing to assess (ONNX Runtime on the CPU runs wherever VOLUM runs) and
+    nothing to implement — a tool either is on disk or is not.
+    """
+
+    metadata: ToolMetadata
+    install_state: InstallState
+    disk_bytes: int = 0
+    install: InstallTask | None = None
 
 
 class ModelEntry(BaseModel):
@@ -274,6 +289,20 @@ class VolumService:
             for metadata in all_models()
         ]
 
+    def list_tools(self) -> list[ToolEntry]:
+        usage = self.models.disk_usage()
+        with self._lock:
+            installs = dict(self._installs)
+        return [
+            ToolEntry(
+                metadata=tool,
+                install_state=self.models.state(tool.id),
+                disk_bytes=usage.get(tool.id, 0),
+                install=installs.get(tool.id),
+            )
+            for tool in all_tools()
+        ]
+
     def get_model(self, model_id: str) -> ModelEntry:
         for entry in self.list_models():
             if entry.metadata.id == model_id:
@@ -282,8 +311,11 @@ class VolumService:
 
     def _unknown_model(self, model_id: str) -> ServiceError:
         known = ", ".join(m.id for m in all_models())
+        tools = ", ".join(t.id for t in all_tools())
         return ServiceError(
-            "not_found", f"Unknown model '{model_id}'.", technical=f"Known models: {known}."
+            "not_found",
+            f"Unknown model '{model_id}'.",
+            technical=f"Known models: {known}. Known tools: {tools}.",
         )
 
     def subscribe_installs(self, listener: InstallListener) -> Callable[[], None]:
@@ -311,7 +343,7 @@ class VolumService:
 
         Explicit and user-triggered — nothing else in the service downloads.
         """
-        if get_model(model_id) is None:
+        if get_model(model_id) is None and get_tool(model_id) is None:
             raise self._unknown_model(model_id)
         if self.models.state(model_id) is InstallState.INSTALLED:
             raise ServiceError("conflict", f"{model_id} is already installed.")
@@ -380,7 +412,7 @@ class VolumService:
         return task
 
     def remove_model(self, model_id: str) -> bool:
-        if get_model(model_id) is None:
+        if get_model(model_id) is None and get_tool(model_id) is None:
             raise self._unknown_model(model_id)
         with self._lock:
             running = self._installs.get(model_id)

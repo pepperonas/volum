@@ -18,6 +18,11 @@ application service and the Tauri app are all in place.
 274 MB, starting its engine from a bundled relocatable CPython with no development
 checkout in sight. Windows and Linux bundles build in CI and have never been started.
 
+**Background removal runs as VOLUM's own preprocessing stage** (BiRefNet over ONNX
+Runtime, a separate 330 MB download). It changes the geometry, not the look: on one
+photograph exported for printing, the background left the repaired model as three separate
+solids; with the subject cut out it is one.
+
 Not done: signing (no certificates), updates, multi-image, and TRELLIS.2 — integrated and
 licence-checked but never installed or run here (needs DINOv3 access and an idle
 machine).
@@ -53,8 +58,10 @@ cd apps/desktop/src-tauri && cargo test --test real_engine -- --ignored  # start
 uv run volum doctor                                    # what this machine can run
 uv run volum models list | show <id> | disk
 uv run volum models install triposr                    # ~2.5 GB, ~90 s
+uv run volum models install birefnet                   # background removal, 330 MB
 uv run volum generate image.png --seed 7               # real inference
 uv run volum generate image.png --print --size-mm 60   # STL + 3MF, repaired, validated
+uv run volum generate image.png --no-remove-background # keep the background in the mesh
 
 # Packaging (docs/packaging.md)
 python3 scripts/build_runtime.py                       # the bundled engine runtime, ~220 MB
@@ -122,6 +129,22 @@ Full reasoning in `docs/decision.md` §4. The parts that are easy to break by ac
 - **A non-loopback announcement is refused, `localhost` included.** A name is resolved
   through the machine's host file, which is not something to trust when deciding where to
   send a session token.
+- **Background removal is a stage, not a provider's business.** Every generator here is
+  single-image and reconstructs what it is shown. `VolumService` decides *whether* to cut
+  the subject out (setting, overridable per job, recorded on the record at submission so a
+  queued job runs the way it was submitted); `pipeline.run` *performs* it, because it owns
+  stage transitions. `preprocess/background.py` runs the worker;
+  `providers/workers/segment_worker.py` is the worker and imports nothing from `volum_core`.
+- **`models/tools.py` is a second catalogue, and the separation is the point.**
+  `models/registry.py` lists things that turn an image into a mesh; a row there for a
+  segmenter would claim you could generate with it. Tools install through the same
+  `ModelManager` — same environment, pinned weights, manifest, removal — and `preflight`
+  gates them on disk alone, because ONNX Runtime on the CPU runs wherever VOLUM runs.
+  `/api/tools` is separate from `/api/models` for the same reason.
+- **`BackgroundOutcome` is an enum because there are five answers.** An image that
+  *already* carried a matte is isolated just as well as one the stage cut out, while a
+  missing segmenter means the background is in the mesh. A single boolean cannot tell
+  those apart; `subject_is_isolated` is the derived question most callers have.
 - **The bundle carries a real CPython, not a frozen binary.** The Model Manager builds a
   virtual environment per provider, and a frozen binary has no interpreter to build one
   from (ADR-0003). One interpreter runs the engine and bases the provider environments;
@@ -145,6 +168,11 @@ uv sync --extra dev --extra engine && uv run ruff check src tests && uv run --wi
 --all-targets -- -D warnings && cargo test` — **`pnpm build` first**, because
 `tauri::generate_context!` refuses to expand when `frontendDist` points at nothing, so a
 fresh checkout cannot compile the shell at all until the frontend exists once.
+
+**The suite must not reach the network.** A test that posted to the install route started
+a real 224 MB download, and the only sign was a Hugging Face rate-limit warning in the
+output. Fake `manager.install`, as `test_install_starts_in_the_background_and_streams`
+does. Check with `uv run pytest -q 2>&1 | grep -i "hf hub"`.
 
 **The suite is fenced off from the real user directories** by an autouse fixture in
 `tests/conftest.py` that sets `VOLUM_CONFIG_DIR` and `VOLUM_DATA_DIR`. It exists because
@@ -215,6 +243,26 @@ a service test once saved a fake Hugging Face token into the developer's real
   sealed. Verify the **installed** copy, not just the built one — that is where the
   bytecode defect lived.
 - **Copy an app bundle with `ditto`, not `cp -R`.**
+- **Background removal costs about as much as a small generation.** Measured on this
+  10-core M1 Pro: 2.4 s to load the model, then **43 s per image under moderate load and
+  60–95 s under heavy load**. The ONNX export declares a **fixed input shape of
+  [1, 3, 1024, 1024]** (pinned by a test), so there is no cheaper resolution to run at, and
+  thread count changes nothing (8 and 4 threads came within 6% of the default). Three
+  comments in the first draft of this feature claimed "a few seconds"; the measurement
+  said otherwise. Do not write a timing here that has not been measured.
+- **An image that already carries a matte must not be re-segmented**, and the check belongs
+  *before* the model is loaded — 0.51 s instead of 157 s on TripoSR's own `chair.png`,
+  which is RGBA with real transparency. A test pins it under 2.5 s so a regression that
+  paid for the load would fail. An alpha channel alone is not a matte: plenty of PNGs carry
+  a fully opaque one, and treating that as a cut-out would skip segmentation for exactly
+  the images that need it. There is deliberately no `image.mode` check in front of the
+  opacity test — it is redundant, and it excluded palette images carrying a transparency
+  index, which *are* mattes.
+- **BiRefNet's preprocessing constants are written out in the worker, not read from
+  `preprocessor_config.json` at run time.** Getting them wrong does not raise; it silently
+  returns a worse mask. A test compares them against the file that ships beside the
+  weights. The independent evidence that they are right: segmenting a chair composited
+  onto a wall recovered coverage 0.231 against the original's true alpha of 0.232.
 - **Model dependency pins are load-bearing.** TripoSR's `transformers==4.35.0` is not
   housekeeping: transformers 5.x renamed the ViT internals, so the published checkpoint
   fails to load entirely. Where a pin cannot be carried, the install manifest records what
@@ -227,6 +275,10 @@ a service test once saved a fake Hugging Face token into the developer's real
 - **No fakes in the production path** (spec §37): no `fake.glb`, no invented progress
   percentages, no mock providers outside unit tests. If a model returns no real progress,
   show pipeline stages, not a fabricated number.
+- **A mask of nothing is the same mistake as an empty mesh.** A cut-out covering under
+  0.5% of the frame is discarded, the original is used, and the file is deleted rather than
+  left on disk looking like an input. A mask covering over 98% is used but reported,
+  because the thing the user asked for did not happen.
 - **A failed poll is not an empty result.** A silent empty mesh must fail the job, not
   export as an asset — this failure mode is documented upstream.
 - **Numbers on screen must say what they measure.** The quality report measures the mesh

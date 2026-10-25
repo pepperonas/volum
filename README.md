@@ -9,9 +9,15 @@ machine. No cloud, no account, no telemetry, no remote inference.
 >
 > The desktop application starts, spawns its engine, generates a model from a photograph
 > and shows it in a 3D viewer. Also working: hardware detection and `volum doctor`, the
-> model manager with the full licence chain on screen, printable output (repaired to a
-> closed solid, exported as STL and 3MF at real millimetres), and the CLI. Measured on an
-> M1 Pro (16 GB) over MPS: **50 s, 41,864 vertices, watertight** with TripoSR.
+> model manager with the full licence chain on screen, background removal before
+> reconstruction, printable output (repaired to a closed solid, exported as STL and 3MF at
+> real millimetres), and the CLI. Measured on an M1 Pro (16 GB) over MPS: **50 s, 41,864
+> vertices, watertight** with TripoSR.
+>
+> Background removal is worth its own line because it changes the geometry rather than the
+> look. On one photograph exported for printing, the background contributed enough surface
+> to leave the repaired model as **three separate solids**; with the subject cut out it is
+> **one**.
 >
 > The macOS application is packaged and runs from `/Applications`. The Windows and Linux
 > installers build in CI and have not been started by anyone

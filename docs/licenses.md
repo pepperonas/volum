@@ -156,6 +156,25 @@ substitution — not this.
 model port pulls RMBG-2.0 by default, VOLUM substitutes BiRefNet in its own preprocessing
 stage (spec §16) rather than accepting the port's default.
 
+### `BiRefNet` — ZhengPeng7 ✅ MIT — **shipped**
+
+| Field | Value |
+|---|---|
+| Licence | MIT License, "Copyright (c) 2024 ZhengPeng" |
+| Read from | `LICENSE` at github.com/ZhengPeng7/BiRefNet, 2026-10-25 |
+| Weights | `onnx-community/BiRefNet_lite-ONNX`, card declares `license: mit`, `base_model: ZhengPeng7/BiRefNet_lite` |
+| Revision | `de15b22ba131738a16dff04aab8bdf8dc32e3ac1` (pinned) |
+| Runtime | `onnxruntime` — MIT (PyPI classifier *License :: OSI Approved :: MIT License*) |
+| Commercial use | **allowed**, no conditions, no territorial restriction, no attribution requirement |
+
+This is the whole chain for VOLUM's background-removal stage, and all of it is MIT. Worth
+stating plainly because the easy path is not: most background-removal code reaches for
+RMBG-2.0 by default, which is the non-commercial entry directly above.
+
+⚠️ **The ONNX repository has no `LICENSE` file**, only the `license: mit` tag in its model
+card. The tag is a declaration rather than a text, which is why the upstream licence was
+read as well — and why the chain is recorded as two rows rather than one.
+
 ### `DINOv3` — Meta ⚠️ usable, gated
 
 | Field | Value |

@@ -445,3 +445,66 @@ def test_each_update_is_snapshotted_when_it_happens_not_when_it_is_sent() -> Non
     frames = asyncio.run(run())
     messages = [json.loads(f[5:])["message"] for f in frames if f.startswith("data:")]
     assert messages == ["repairing", "validating", "done"]
+
+
+# --- preprocessing tools --------------------------------------------------
+
+
+def test_tools_are_listed_apart_from_the_models(client: TestClient) -> None:
+    """A tool in the model list would claim you could generate with it."""
+    models = {entry["metadata"]["id"] for entry in client.get("/api/models", headers=AUTH).json()}
+    tools = {entry["metadata"]["id"] for entry in client.get("/api/tools", headers=AUTH).json()}
+
+    assert "birefnet" in tools
+    assert "birefnet" not in models
+    assert not (models & tools)
+
+
+def test_a_tool_row_says_whether_it_is_on_disk(client: TestClient) -> None:
+    entry = next(
+        e
+        for e in client.get("/api/tools", headers=AUTH).json()
+        if e["metadata"]["id"] == "birefnet"
+    )
+    assert entry["install_state"] in {"installed", "not_installed", "incomplete"}
+    # The licence chain travels with it, same as a model's.
+    assert entry["metadata"]["license"]["weights_license"] == "MIT"
+    assert entry["metadata"]["license"]["commercial_use"] == "allowed"
+
+
+def test_a_tool_can_be_installed_through_the_model_route(
+    client: TestClient, service: VolumService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One machinery, so one route. Only the catalogue differs.
+
+    The installer is faked. Without that this test downloads 224 MB, which is
+    how it behaved when first written — a test suite must not reach the network.
+    """
+    installed: list[str] = []
+
+    def fake_install(model_id: str, **kwargs):  # type: ignore[no-untyped-def]
+        installed.append(model_id)
+        mark_installed(service.models, model_id)
+        return InstallManifest(model_id=model_id, volum_version="0.1.0", python_version="3.11")
+
+    monkeypatch.setattr(service.models, "install", fake_install)
+
+    response = client.post("/api/models/birefnet/install", headers=AUTH, json={})
+    assert response.status_code == 202, response.text
+    assert installed == ["birefnet"]
+
+
+def test_installing_something_in_neither_catalogue_is_still_unknown(client: TestClient) -> None:
+    """Widening the route must not have widened it to everything."""
+    response = client.post("/api/models/not-a-thing/install", headers=AUTH, json={})
+    assert response.status_code == 404
+    technical = response.json()["error"]["technical"]
+    # Both catalogues are named, because the user cannot know which they meant.
+    assert "Known models" in technical
+    assert "Known tools" in technical
+
+
+def test_the_settings_say_whether_the_background_remover_is_there(client: TestClient) -> None:
+    settings = client.get("/api/settings", headers=AUTH).json()
+    assert settings["remove_background"] is True
+    assert "background_remover_installed" in settings

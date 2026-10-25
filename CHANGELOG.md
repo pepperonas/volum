@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background removal as VOLUM's own preprocessing stage.** Every generator here
+  is single-image and reconstructs what it is shown, so a wall behind the subject
+  becomes geometry — and in a printable model, a second object on the plate.
+  Measured on one photograph exported at 60 mm: without the cut-out the repaired
+  model is **three separate solids** and the job says so; with it, **one**.
+  BiRefNet (lite) over ONNX Runtime, MIT throughout, a separate 330 MB download
+  catalogued apart from the generators because nothing in it makes a mesh. An
+  image that already carries transparency is left alone, checked before the model
+  is loaded (0.51 s instead of 157 s). The stage never fails a job: a cut-out of
+  nothing is discarded, and an image with its background is still a legitimate
+  input that the asset describes honestly.
+- `volum models install birefnet`, a `Preprocessing` section in
+  `volum models list`, `GET /api/tools`, and the setting in the window.
 - Phase 0 environment and repository audit (`docs/audit-phase0.md`).
 - Phase 1 image-to-3D model research, primary-source verified (`docs/research.md`).
 - Model capability / hardware / licence evaluation (`docs/model-evaluation.md`).

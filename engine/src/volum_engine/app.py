@@ -26,6 +26,7 @@ from volum_core.service import (
     ModelEntry,
     ServiceError,
     SettingsView,
+    ToolEntry,
     VolumService,
 )
 from volum_core.version import __version__
@@ -192,6 +193,17 @@ def create_app(service: VolumService, *, token: str) -> FastAPI:
             is_final=lambda task: task.state != "running",
         )
         return source.response(request, entry.install)
+
+    @app.get("/api/tools", response_model=list[ToolEntry])
+    async def list_tools() -> list[ToolEntry]:
+        """Installable components that are not generators.
+
+        A separate route rather than rows in /api/models: nothing here produces
+        a mesh, and a client that merged the two would offer to generate with
+        one. Installing and removing go through the model routes, because the
+        machinery is the same.
+        """
+        return service.list_tools()
 
     @app.delete("/api/models/{model_id}", response_model=RemovedResponse)
     async def remove_model(model_id: str) -> RemovedResponse:

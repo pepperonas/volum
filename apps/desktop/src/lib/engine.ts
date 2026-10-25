@@ -18,6 +18,7 @@ import type {
   ModelEntry,
   SettingsPatch,
   SettingsView,
+  ToolEntry,
 } from "./types";
 
 export interface EngineInfo {
@@ -180,6 +181,9 @@ export const api = {
   doctor: (deep = true) => call<DoctorReport>(`/api/system/doctor?deep=${deep}`),
 
   models: () => call<ModelEntry[]>("/api/models"),
+  // Installing and removing go through the model routes: same machinery,
+  // different catalogue.
+  tools: () => call<ToolEntry[]>("/api/tools"),
   model: (id: string) => call<ModelEntry>(`/api/models/${id}`),
   installModel: (id: string, body: { hfToken?: string; allowMarginal?: boolean } = {}) =>
     call<InstallTask>(`/api/models/${id}/install`, {

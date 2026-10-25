@@ -135,6 +135,24 @@ export interface ModelEntry {
   install: InstallTask | null;
 }
 
+/** A preprocessing component. Not a generator — nothing here makes a mesh. */
+export interface ToolMetadata {
+  id: string;
+  name: string;
+  description: string;
+  stage: string;
+  license: LicenseMetadata;
+  disk_bytes: number;
+  numbers_source: string;
+}
+
+export interface ToolEntry {
+  metadata: ToolMetadata;
+  install_state: InstallState;
+  disk_bytes: number;
+  install: InstallTask | null;
+}
+
 export interface JobProgress {
   stage: JobStatus;
   fraction: number | null;
@@ -175,6 +193,18 @@ export interface JobRequest {
   target_size_mm?: number | null;
   single_part?: boolean;
   device?: string | null;
+  /** `null` follows the setting. Explicit overrides one job, not every later one. */
+  remove_background?: boolean | null;
+}
+
+/** What the preprocessing stage did. Absent on assets made before it existed. */
+export interface BackgroundRemoval {
+  outcome: "removed" | "already_transparent" | "no_subject_found" | "not_installed" | "failed";
+  note: string;
+  model_id: string | null;
+  model_revision: string | null;
+  coverage: number | null;
+  duration_seconds: number | null;
 }
 
 export interface JobSubmission {
@@ -187,11 +217,19 @@ export interface SettingsView {
   data_dir_is_default: boolean;
   hugging_face_token_set: boolean;
   allow_marginal_models: boolean;
+  remove_background: boolean;
+  /**
+   * Whether the segmenter is on disk. This can be false while
+   * `remove_background` is true, which is exactly the state worth showing:
+   * asked for, not happening.
+   */
+  background_remover_installed: boolean;
 }
 
 export interface SettingsPatch {
   hugging_face_token?: string | null;
   clear_hugging_face_token?: boolean;
   allow_marginal_models?: boolean | null;
+  remove_background?: boolean | null;
   data_dir?: string | null;
 }
